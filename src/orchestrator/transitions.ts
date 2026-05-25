@@ -1,0 +1,249 @@
+/**
+ * State machine transitions for the flow orchestrator.
+ *
+ * Pure functions — no I/O. The engine reads state, calls these functions,
+ * then writes the resulting state back to workflow.json.
+ */
+
+import {
+  DEFAULT_ATTEMPTS,
+  type FlowDefinition,
+  type FlowStep,
+  type GateAnswer,
+  type StepResult,
+  type StepStatus,
+  type WorkflowGate,
+  type WorkflowState,
+  type WorkflowStatus,
+  type WorkflowStep,
+} from "../shared/types.ts";
+
+// ============================================================================
+// Initialization
+// ============================================================================
+
+/** Freeze a flow definition into an initial WorkflowState. */
+export function createWorkflowState(
+  flow: FlowDefinition,
+  feature: string,
+  featurePath: string,
+  projectRoot: string,
+  serviceDirs?: string[]
+): WorkflowState {
+  const steps: WorkflowStep[] = flow.steps.map((step, index) => ({
+    index,
+    id: step.id ?? step.agent,
+    agent: step.agent,
+    status: "pending" as StepStatus,
+    attempt: 0,
+  }));
+
+  return {
+    schema_version: 1,
+    feature,
+    feature_path: featurePath,
+    project_root: projectRoot,
+    flow_id: flow.id,
+    flow_version: flow.version,
+    flow_snapshot: JSON.parse(JSON.stringify(flow)), // deep clone
+    current_step_index: 0,
+    status: "in_progress",
+    awaiting: null,
+    steps,
+    service_dirs: serviceDirs,
+    build_status: null,
+  };
+}
+
+// ============================================================================
+// Step start
+// ============================================================================
+
+/** Mark the current step as running. Returns updated state. */
+export function startStep(state: WorkflowState): WorkflowState {
+  const next = { ...state, steps: state.steps.map((s) => ({ ...s })) };
+  const step = next.steps[next.current_step_index];
+  if (!step) return next;
+
+  step.status = "running";
+  step.started_at = new Date().toISOString();
+  step.attempt += 1;
+
+  return next;
+}
+
+// ============================================================================
+// Step complete — the core transition
+// ============================================================================
+
+export interface StepTransition {
+  state: WorkflowState;
+  /** What action the orchestrator should take next */
+  action: "advance" | "retry" | "gate" | "block" | "done";
+  /** Optional: gate data to present to the user */
+  gate?: WorkflowGate;
+  /** Optional: error message for the caller */
+  error?: string;
+}
+
+/** Current flow step being executed */
+export function currentStep(state: WorkflowState): FlowStep | null {
+  if (state.current_step_index >= state.flow_snapshot.steps.length) return null;
+  return state.flow_snapshot.steps[state.current_step_index];
+}
+
+/** Current workflow step being executed */
+export function currentWorkflowStep(state: WorkflowState): WorkflowStep | null {
+  if (state.current_step_index >= state.steps.length) return null;
+  return state.steps[state.current_step_index];
+}
+
+/**
+ * Apply a step result and compute the next transition.
+ *
+ * @param state - Current workflow state
+ * @param result - step-result from the supervisor
+ * @param loadGate - function to build a WorkflowGate from the agent's approval manifest
+ */
+export function applyStepResult(
+  state: WorkflowState,
+  result: StepResult,
+  loadGate: (agent: string, stepIndex: number) => WorkflowGate | null
+): StepTransition {
+  const next = cloneState(state);
+  const step = currentWorkflowStep(next);
+  const flowStep = currentStep(next);
+
+  if (!step || !flowStep) {
+    return { state: next, action: "done" };
+  }
+
+  step.result = { ...result };
+  step.completed_at = new Date().toISOString();
+
+  if (result.result === "success") {
+    step.status = "completed";
+
+    // Check if this step requires user approval
+    if (flowStep.requestApproval) {
+      const gate = loadGate(flowStep.agent, step.index);
+      if (!gate) {
+        // Missing approval block — should be caught at start time, but guard here too
+        return {
+          state: next,
+          action: "block",
+          error: `step "${flowStep.agent}" requires user approval but no approval block found`,
+        };
+      }
+
+      next.status = "awaiting_user";
+      next.awaiting = "user_gate";
+      next.gate = gate;
+
+      return { state: next, action: "gate", gate };
+    }
+
+    // No approval needed — advance
+    return advanceStep(next);
+  }
+
+  // error result
+  step.status = "failed";
+
+  const maxAttempts = flowStep.attempts ?? DEFAULT_ATTEMPTS;
+  if (step.attempt < maxAttempts) {
+    // Retry — status goes back to pending for re-run
+    step.status = "pending";
+    return { state: next, action: "retry" };
+  }
+
+  // No retries left — block
+  next.status = "blocked";
+  next.build_status = "BLOCKED";
+  return { state: next, action: "block" };
+}
+
+// ============================================================================
+// Gate answer
+// ============================================================================
+
+export interface GateTransition {
+  state: WorkflowState;
+  action: "advance" | "retry" | "block" | "done" | "abort";
+}
+
+/**
+ * Apply a gate answer and compute the next transition.
+ *
+ * If the user chose an option with advance: true, the flow advances.
+ * Otherwise, the caller (supervisor) decides what to do — the engine
+ * returns action: "retry" to indicate the same step should be re-run.
+ */
+export function applyGateAnswer(
+  state: WorkflowState,
+  answer: GateAnswer
+): GateTransition {
+  const next = cloneState(state);
+
+  if (next.current_step_index !== answer.stepIndex) {
+    return { state: next, action: "block" };
+  }
+
+  next.awaiting = null;
+  next.gate = undefined;
+
+  if (answer.advance) {
+    next.current_step_index += 1;
+    if (next.current_step_index >= next.steps.length) {
+      next.status = "done";
+      next.build_status = "DONE";
+      return { state: next, action: "done" };
+    }
+    next.status = "in_progress";
+    return { state: next, action: "advance" };
+  }
+
+  // User did not approve
+  if (answer.abort) {
+    // Abort/exit the workflow entirely
+    next.status = "abandoned";
+    next.build_status = "BLOCKED";
+    return { state: next, action: "abort" };
+  }
+
+  // Request changes — reset the step for re-run
+  const step = next.steps[next.current_step_index];
+  if (step) {
+    step.status = "pending";
+  }
+  next.status = "in_progress";
+  return { state: next, action: "retry" };
+}
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+function cloneState(state: WorkflowState): WorkflowState {
+  return {
+    ...state,
+    steps: state.steps.map((s) => ({ ...s })),
+    gate: state.gate ? { ...state.gate, options: [...state.gate.options] } : undefined,
+    flow_snapshot: { ...state.flow_snapshot, steps: [...state.flow_snapshot.steps] },
+  };
+}
+
+function advanceStep(state: WorkflowState): StepTransition {
+  state.current_step_index += 1;
+  return advanceGateStep(state);
+}
+
+function advanceGateStep(state: WorkflowState): GateTransition | StepTransition {
+  if (state.current_step_index >= state.steps.length) {
+    state.status = "done";
+    state.build_status = "DONE";
+    return { state, action: "done" };
+  }
+  state.status = "in_progress";
+  return { state, action: "advance" };
+}
