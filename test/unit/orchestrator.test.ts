@@ -45,6 +45,7 @@ before(() => {
       "id: gather-input",
       "version: 1",
       'tools: ["ask_user_question", "read"]',
+      'outputs: ["feature-input.md"]',
       'approval: {"header": "Gather Input", "options": [{"label": "Approve", "description": "Looks good", "advance": true}, {"label": "Refine", "description": "Need more", "advance": false}]}',
       "---",
       "Gather input from the user.",
@@ -203,6 +204,8 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
     assert.equal(instruction?.attempt, 1);
     assert.equal(instruction?.maxAttempts, 2);
     assert.ok(instruction?.subagents);
+    assert.ok(instruction?.subagentInstructions?.worker);
+    assert.ok(instruction.subagentInstructions.worker.prompt.includes("Implement the assigned task."));
     assert.ok(instruction?.parallel);
     assert.equal(instruction?.parallel?.subagent, "worker");
 
@@ -300,6 +303,36 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
     // Step should be pending again
     const state = status(projectRoot, featurePath);
     assert.equal(state?.steps[0].status, "pending");
+  });
+
+  it("warns when a successful step is missing declared outputs", () => {
+    const { featurePath } = start(testFlow, "missing-output", projectRoot);
+
+    step(projectRoot, featurePath);
+    const outcome = stepComplete(
+      { result: "success", message: "Done without artifact" },
+      projectRoot,
+      featurePath
+    );
+
+    assert.ok(outcome?.warnings?.some((warning) => warning.includes("feature-input.md")));
+  });
+
+  it("stores service_dirs metadata on successful step completion", () => {
+    const { featurePath } = start(testFlow, "metadata", projectRoot);
+
+    step(projectRoot, featurePath);
+    const outcome = stepComplete(
+      {
+        result: "success",
+        message: "Input gathered",
+        metadata: { service_dirs: ["services/api", "packages/web"] },
+      },
+      projectRoot,
+      featurePath
+    );
+
+    assert.deepEqual(outcome?.state.service_dirs, ["services/api", "packages/web"]);
   });
 });
 

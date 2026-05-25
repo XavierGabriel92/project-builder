@@ -106,21 +106,41 @@ export function listWorkflows(projectRoot: string): string[] {
 }
 
 /**
- * Find an active (in_progress or awaiting_user) workflow in a project.
- * Returns the first one found, or null.
+ * Find all active (in_progress or awaiting_user) workflows in a project.
+ */
+export function findActiveWorkflows(projectRoot: string): Array<{
+  featurePath: string;
+  state: WorkflowState;
+}> {
+  const paths = listWorkflows(projectRoot);
+  const active: Array<{ featurePath: string; state: WorkflowState }> = [];
+  for (const fp of paths) {
+    const state = readWorkflow(projectRoot, fp);
+    if (state && (state.status === "in_progress" || state.status === "awaiting_user")) {
+      active.push({ featurePath: fp, state });
+    }
+  }
+  return active;
+}
+
+/**
+ * Find an active workflow in a project.
+ * Throws when more than one active workflow exists and the caller did not specify a path.
  */
 export function findActiveWorkflow(projectRoot: string): {
   featurePath: string;
   state: WorkflowState;
 } | null {
-  const paths = listWorkflows(projectRoot);
-  for (const fp of paths) {
-    const state = readWorkflow(projectRoot, fp);
-    if (state && (state.status === "in_progress" || state.status === "awaiting_user")) {
-      return { featurePath: fp, state };
-    }
+  const active = findActiveWorkflows(projectRoot);
+  if (active.length === 0) return null;
+  if (active.length > 1) {
+    throw new Error(
+      `Multiple active workflows found. Specify featurePath: ${active
+        .map((run) => run.featurePath)
+        .join(", ")}`
+    );
   }
-  return null;
+  return active[0];
 }
 
 /**

@@ -13,6 +13,8 @@
  *   list(projectRoot) → string[]
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   type FlowDefinition,
   type GateAnswer,
@@ -26,6 +28,7 @@ import {
   writeWorkflow,
   listWorkflows,
   resolveWorkflow,
+  getWorkflowDir,
 } from "../shared/persistence.ts";
 import {
   createWorkflowState,
@@ -39,6 +42,7 @@ import {
 } from "./transitions.ts";
 import {
   loadAgent,
+  loadFlowAgents,
   validateFlowApproval,
   buildGate,
 } from "./agent-loader.ts";
@@ -53,6 +57,23 @@ let _agentsDir = "";
 /** Initialize the engine with the path to the agents/ directory */
 export function initEngine(agentsDir: string): void {
   _agentsDir = agentsDir;
+}
+
+/** Validate registered flows and all referenced agent manifests. */
+export function validateFlows(flows: FlowDefinition[]): void {
+  const errors: string[] = [];
+  for (const flow of flows) {
+    try {
+      loadFlowAgents(agentsDir(), flow);
+      validateFlowApproval(agentsDir(), flow);
+    } catch (err) {
+      errors.push(`Flow "${flow.id}": ${(err as Error).message}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Flow validation failed:\n${errors.map((e) => `  - ${e}`).join("\n")}`);
+  }
 }
 
 function agentsDir(): string {
@@ -120,6 +141,10 @@ export function step(
   if (!resolved) return null;
 
   let { state } = resolved;
+  if (state.status === "awaiting_user") {
+    throw new Error("Workflow is awaiting user approval. Answer the active gate before requesting another step.");
+  }
+  if (state.status !== "in_progress") return null;
 
   const flowStep = currentStep(state);
   if (!flowStep) return null; // No more steps
@@ -130,6 +155,21 @@ export function step(
 
   // Load agent manifest
   const loaded = loadAgent(agentsDir(), flowStep.agent);
+  const subagentInstructions = loaded.manifest.subagents
+    ? Object.fromEntries(
+        Object.entries(loaded.manifest.subagents).map(([name, relativePath]) => {
+          const subagent = loadAgent(agentsDir(), relativePath, true);
+          return [
+            name,
+            {
+              path: relativePath,
+              tools: subagent.manifest.tools,
+              prompt: subagent.prompt,
+            },
+          ];
+        })
+      )
+    : undefined;
 
   // Build instruction
   const instruction: StepInstruction = {
@@ -137,6 +177,7 @@ export function step(
     stepIndex: state.current_step_index,
     tools: loaded.manifest.tools,
     subagents: loaded.manifest.subagents,
+    subagentInstructions,
     parallel: loaded.manifest.parallel,
     prompt: loaded.prompt,
     requestApproval: flowStep.requestApproval ?? false,
@@ -160,6 +201,8 @@ export interface StepCompleteResult {
   gate?: WorkflowGate;
   /** Present if action is "block" or there's an error */
   error?: string;
+  /** Non-blocking output/artifact checks */
+  warnings?: string[];
 }
 
 /**
@@ -178,6 +221,11 @@ export function stepComplete(
   if (!resolved) return null;
 
   const { state } = resolved;
+  const flowStep = currentStep(state);
+  const warnings =
+    paramsSucceeded(result) && flowStep
+      ? verifyExpectedOutputs(projectRoot, resolved.featurePath, flowStep.agent)
+      : [];
 
   // Build gate loader bound to the agents directory
   const loadGate = (agent: string, stepIndex: number): WorkflowGate | null => {
@@ -200,7 +248,27 @@ export function stepComplete(
     action: transition.action,
     gate: transition.gate,
     error: transition.error,
+    warnings,
   };
+}
+
+function paramsSucceeded(result: StepResult): boolean {
+  return result.result === "success";
+}
+
+function verifyExpectedOutputs(
+  projectRoot: string,
+  featurePath: string,
+  agent: string
+): string[] {
+  const loaded = loadAgent(agentsDir(), agent);
+  const outputs = loaded.manifest.outputs ?? [];
+  if (outputs.length === 0) return [];
+
+  const workflowDir = getWorkflowDir(projectRoot, featurePath);
+  return outputs
+    .filter((output) => !fs.existsSync(path.join(workflowDir, output)))
+    .map((output) => `Expected output missing: ${output}`);
 }
 
 // ============================================================================

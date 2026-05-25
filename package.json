@@ -11,6 +11,7 @@
   "files": [
     "src/**/*.ts",
     "*.mjs",
+    "scripts/",
     "agents/",
     "flows/",
     "skills/**/*",
@@ -18,7 +19,9 @@
   ],
   "keywords": ["pi-package", "pi", "pi-coding-agent", "flow-engine", "project-builder"],
   "scripts": {
-    "test": "node --experimental-strip-types --test test/unit/*.test.ts"
+    "test": "node --experimental-strip-types --test test/unit/*.test.ts",
+    "validate": "node --experimental-strip-types scripts/validate.mjs",
+    "scaffold:agent": "node scripts/scaffold-agent.mjs"
   },
   "pi": {
     "extensions": ["./src/extension/index.ts"],

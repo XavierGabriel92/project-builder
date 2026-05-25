@@ -156,6 +156,69 @@ describe("applyStepResult", () => {
     assert.equal(transition.state.current_step_index, 2); // same step
   });
 
+  it("blocks non-retryable errors even when attempts remain", () => {
+    let state = createWorkflowState(testFlow(), "feat", "path", "/project");
+    state.current_step_index = 2;
+    state = startStep(state);
+
+    const transition = applyStepResult(
+      state,
+      { result: "error", message: "Permanent failure", retryable: false },
+      () => noGate()
+    );
+
+    assert.equal(transition.action, "block");
+    assert.equal(transition.state.status, "blocked");
+    assert.equal(transition.state.steps[2].status, "failed");
+  });
+
+  it("blocks completion when workflow is awaiting a user gate", () => {
+    let state = createWorkflowState(testFlow(), "feat", "path", "/project");
+    state = startStep(state);
+    state.status = "awaiting_user";
+    state.awaiting = "user_gate";
+    state.gate = testGate(0);
+
+    const transition = applyStepResult(
+      state,
+      { result: "success", message: "Too late" },
+      () => noGate()
+    );
+
+    assert.equal(transition.action, "block");
+    assert.match(transition.error ?? "", /awaiting user approval/);
+  });
+
+  it("blocks completion when the current step is not running", () => {
+    const state = createWorkflowState(testFlow(), "feat", "path", "/project");
+
+    const transition = applyStepResult(
+      state,
+      { result: "success", message: "Not run" },
+      () => noGate()
+    );
+
+    assert.equal(transition.action, "block");
+    assert.match(transition.error ?? "", /call flow_step/);
+  });
+
+  it("merges service directory metadata on success", () => {
+    let state = createWorkflowState(testFlow(), "feat", "path", "/project");
+    state = startStep(state);
+
+    const transition = applyStepResult(
+      state,
+      {
+        result: "success",
+        message: "Planned",
+        metadata: { service_dirs: ["services/api", "services/api", "packages/web"] },
+      },
+      () => noGate()
+    );
+
+    assert.deepEqual(transition.state.service_dirs, ["services/api", "packages/web"]);
+  });
+
   it("blocks when retries exhausted", () => {
     let state = createWorkflowState(testFlow(), "feat", "path", "/project");
     state.current_step_index = 2;

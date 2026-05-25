@@ -8,13 +8,14 @@
  * All domain logic lives in flows/*.ts and agents/*.md.
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { Type } from "typebox";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { initEngine, start, step, stepComplete, recordGate, status, abort, list } from "../orchestrator/engine.ts";
-import { featureBuild } from "../../flows/index.ts";
+import { initEngine, validateFlows, start, step, stepComplete, recordGate, status, abort, list } from "../orchestrator/engine.ts";
+import { allFlows } from "../../flows/index.ts";
 
 // ---------------------------------------------------------------------------
 // Flow registry
@@ -79,6 +80,43 @@ function renderWorkflowStatus(state: import("../shared/types.ts").WorkflowState)
   return lines;
 }
 
+function renderSubagentInstructions(
+  instruction: import("../shared/types.ts").StepInstruction
+): string[] {
+  if (!instruction.subagentInstructions) return [];
+
+  const lines: string[] = ["", "## Subagent Prompts"];
+  for (const [name, subagent] of Object.entries(instruction.subagentInstructions)) {
+    lines.push("");
+    lines.push(`### ${name} (${subagent.path})`);
+    lines.push(`Tools: ${subagent.tools.join(", ")}`);
+    lines.push("");
+    lines.push(subagent.prompt);
+  }
+  return lines;
+}
+
+function renderGatePreview(
+  projectRoot: string,
+  featurePath: string,
+  gate: import("../shared/types.ts").WorkflowGate
+): string[] {
+  if (!gate.preview) return [];
+
+  const previewPath = path.join(projectRoot, ".temp", featurePath, gate.preview);
+  if (!fs.existsSync(previewPath)) {
+    return [`Preview configured but missing: ${gate.preview}`];
+  }
+
+  const preview = fs
+    .readFileSync(previewPath, "utf-8")
+    .split("\n")
+    .slice(0, 80)
+    .join("\n");
+
+  return [`Preview: ${gate.preview}`, "", preview];
+}
+
 // ---------------------------------------------------------------------------
 // Extension entry
 // ---------------------------------------------------------------------------
@@ -93,7 +131,8 @@ export default function (pi: ExtensionAPI) {
   initEngine(agentsDir);
 
   // --- Load flow registry ---
-  loadFlowRegistry(extensionDir);
+  loadFlowRegistry();
+  validateFlows([...flowRegistry.values()].map((entry) => entry.definition));
 
   // ---------------------------------------------------------------------------
   // Tool: flow_start
@@ -106,13 +145,14 @@ export default function (pi: ExtensionAPI) {
     promptSnippet:
       "Start a new workflow using a registered flow definition",
     parameters: Type.Object({
-      flowId: Type.String({ description: "Flow definition ID (e.g. 'feature-build', 'deploy-pipeline')" }),
+      flowId: Type.String({ description: "Flow definition ID (e.g. 'feature-build')" }),
       featureName: Type.String({ description: "Human-readable name for what's being built (e.g. 'user-auth')" }),
+      serviceDirs: Type.Optional(Type.Array(Type.String({ description: "Service directories touched by the flow" }))),
       projectRoot: Type.Optional(Type.String({ description: "Project root directory (defaults to current working directory)" })),
     }),
     async execute(
       _toolCallId: string,
-      params: { flowId: string; featureName: string; projectRoot?: string }
+      params: { flowId: string; featureName: string; serviceDirs?: string[]; projectRoot?: string }
     ): Promise<AgentToolResult> {
       const projectRoot = params.projectRoot || getProjectRoot();
       const entry = flowRegistry.get(params.flowId);
@@ -129,7 +169,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       try {
-        const result = start(entry.definition, params.featureName, projectRoot);
+        const result = start(entry.definition, params.featureName, projectRoot, params.serviceDirs);
         const lines = renderWorkflowStatus(result.state);
         return {
           content: [{ type: "text", text: lines.join("\n") }],
@@ -203,6 +243,7 @@ export default function (pi: ExtensionAPI) {
           "## Agent Prompt",
           "",
           instruction.prompt,
+          ...renderSubagentInstructions(instruction),
         ]
           .filter(Boolean)
           .join("\n");
@@ -239,12 +280,24 @@ export default function (pi: ExtensionAPI) {
       result: Type.Union([Type.Literal("success"), Type.Literal("error")]),
       message: Type.String({ description: "Human-readable summary of the outcome" }),
       retryable: Type.Optional(Type.Boolean({ description: "For errors: whether retry makes sense" })),
+      metadata: Type.Optional(
+        Type.Object({
+          service_dirs: Type.Optional(Type.Array(Type.String())),
+        })
+      ),
       featurePath: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String()),
     }),
     async execute(
       _toolCallId: string,
-      params: { result: "success" | "error"; message: string; retryable?: boolean; featurePath?: string; projectRoot?: string },
+      params: {
+        result: "success" | "error";
+        message: string;
+        retryable?: boolean;
+        metadata?: { service_dirs?: string[] };
+        featurePath?: string;
+        projectRoot?: string;
+      },
       _signal: AbortSignal | undefined,
       _onUpdate: unknown,
       ctx: ExtensionContext
@@ -253,7 +306,12 @@ export default function (pi: ExtensionAPI) {
 
       try {
         const outcome = stepComplete(
-          { result: params.result, message: params.message, retryable: params.retryable },
+          {
+            result: params.result,
+            message: params.message,
+            retryable: params.retryable,
+            metadata: params.metadata,
+          },
           projectRoot,
           params.featurePath
         );
@@ -267,6 +325,13 @@ export default function (pi: ExtensionAPI) {
 
         const lines: string[] = [];
         lines.push(`Step result: **${params.result}**`);
+        if (outcome.warnings?.length) {
+          lines.push("");
+          lines.push("Warnings:");
+          for (const warning of outcome.warnings) {
+            lines.push(`- ${warning}`);
+          }
+        }
 
         switch (outcome.action) {
           case "advance":
@@ -279,6 +344,12 @@ export default function (pi: ExtensionAPI) {
             // Present the approval gate directly to the user via UI selector.
             // This prevents the AI from auto-approving gates without user input.
             if (ctx.hasUI && outcome.gate) {
+              const previewLines = renderGatePreview(projectRoot, outcome.featurePath, outcome.gate);
+              if (previewLines.length > 0) {
+                lines.push("");
+                lines.push(...previewLines);
+                lines.push("");
+              }
               const gateOptions = outcome.gate.options.map((o) => o.label);
               const chosenLabel = await ctx.ui.select(
                 `Approve: ${outcome.gate.header}`,
@@ -329,6 +400,7 @@ export default function (pi: ExtensionAPI) {
 
             // No UI available — fall back to text-based gate (non-interactive mode)
             lines.push(`⛔ **Approval required: ${outcome.gate!.header}**`);
+            lines.push(...renderGatePreview(projectRoot, outcome.featurePath, outcome.gate!));
             lines.push("");
             for (const opt of outcome.gate!.options) {
               lines.push(
@@ -381,12 +453,13 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       advance: Type.Boolean({ description: "Whether the chosen option means 'approved' (should match the agent's advance field)" }),
       chosenLabel: Type.Optional(Type.String({ description: "Label of the chosen option (for logging)" })),
+      abort: Type.Optional(Type.Boolean({ description: "Whether this non-advance answer should abandon the workflow" })),
       featurePath: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String()),
     }),
     async execute(
       _toolCallId: string,
-      params: { advance: boolean; chosenLabel?: string; featurePath?: string; projectRoot?: string },
+      params: { advance: boolean; chosenLabel?: string; abort?: boolean; featurePath?: string; projectRoot?: string },
       _signal: AbortSignal | undefined,
       _onUpdate: unknown,
       ctx: ExtensionContext
@@ -414,9 +487,14 @@ export default function (pi: ExtensionAPI) {
         // This prevents the AI from auto-approving gates without user input.
         let actualAdvance = params.advance;
         let actualLabel = params.chosenLabel ?? "answered";
-        let actualAbort = false;
+        let actualAbort = params.abort ?? false;
 
         if (ctx.hasUI) {
+          const previewLines = renderGatePreview(projectRoot, state.feature_path, state.gate);
+          if (previewLines.length > 0) {
+            ctx.ui.notify(previewLines.join("\n"), "info");
+          }
+
           const gateOptions = state.gate.options.map((o) => o.label);
           const chosenLabel = await ctx.ui.select(
             `Approve: ${state.gate.header}`,
@@ -631,7 +709,7 @@ export default function (pi: ExtensionAPI) {
 
       if (active) {
         ctx.ui.notify(
-          `Active: ${active.feature} [${active.flow_id}] — Step ${active.current_step_index + 1}/${active.steps.length}: ${active.status}`,
+          renderWorkflowStatus(active).join("\n"),
           "info"
         );
       } else {
@@ -648,7 +726,9 @@ export default function (pi: ExtensionAPI) {
 // Flow registry loader
 // ---------------------------------------------------------------------------
 
-function loadFlowRegistry(_extensionDir: string): void {
-  flowRegistry.set("feature-build", { definition: featureBuild });
-  flowRegistry.set("deploy-pipeline", { definition: deployPipeline });
+function loadFlowRegistry(): void {
+  flowRegistry = new Map();
+  for (const definition of allFlows) {
+    flowRegistry.set(definition.id, { definition });
+  }
 }

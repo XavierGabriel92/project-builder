@@ -114,6 +114,10 @@ export interface StepResult {
   message: string;
   /** Only relevant for error results */
   retryable?: boolean;
+  /** Optional structured state updates submitted by the supervisor */
+  metadata?: {
+    service_dirs?: string[];
+  };
 }
 
 // ============================================================================
@@ -181,6 +185,15 @@ export interface StepInstruction {
   tools: AgentTool[];
   /** Subagent name → path mapping */
   subagents?: Record<string, string>;
+  /** Fully loaded subagent contracts for supervisor fan-out */
+  subagentInstructions?: Record<
+    string,
+    {
+      path: string;
+      tools: AgentTool[];
+      prompt: string;
+    }
+  >;
   /** Parallel fan-out config */
   parallel?: AgentManifest["parallel"];
   /** The agent's prompt (body of the .md file) */

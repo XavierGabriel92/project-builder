@@ -1,6 +1,6 @@
 # RFC: Declarative generic flow engine
 
-**Status:** Draft (decisions locked — pending implementation)  
+**Status:** Implemented v1 (decisions locked; v2 ideas deferred)  
 **Location:** `~/.pi/agent/extensions/project-builder/rfc.md`  
 **Scope:** Generic flow orchestration engine; not coupled to any specific use case
 
@@ -55,22 +55,32 @@ Three layers:
 ```text
 ~/.pi/agent/extensions/project-builder/
   flows/
-    feature-build.ts        # one example flow
-    some-other-workflow.ts  # totally different domain
+    index.ts                # exports feature-build and allFlows
   agents/
     gather-input.md
     discover.md
+    clarify.md
+    spec-write.md
+    research.md
+    plan.md
     implement.md
-    …
+    review.md
+    doc-sync.md
+    complete.md
     subagents/
+      scout.md
       worker.md
-      spec-writer.md
-      …
-  orchestrator/
-    engine.ts
-    step-result.schema.ts
-    transitions.ts
-  extension/
+      reviewer.md
+  src/
+    orchestrator/
+      engine.ts
+      step-result.schema.ts
+      transitions.ts
+    extension/
+      index.ts
+    shared/
+      types.ts
+      persistence.ts
   rfc.md
 ```
 
@@ -157,16 +167,14 @@ The flow is just a list of agent names + approval flag — nothing domain-specif
 ### Example — hypothetical totally different flow
 
 ```typescript
-export const deployPipeline: FlowDefinition = {
-  id: "deploy-pipeline",
+export const releasePipeline: FlowDefinition = {
+  id: "release-pipeline",
   version: 1,
-  description: "CI/CD style pipeline",
+  description: "Release checklist pipeline",
   steps: [
-    { agent: "run-tests", attempts: 3 },
-    { agent: "build-artifacts" },
-    { agent: "deploy-staging", requestApproval: true },
-    { agent: "smoke-tests", attempts: 2 },
-    { agent: "deploy-prod", requestApproval: true },
+    { agent: "run-checks", attempts: 3 },
+    { agent: "build-release-notes" },
+    { agent: "publish-release", requestApproval: true },
   ],
 };
 ```
@@ -281,11 +289,11 @@ parallel:
 
 No `approval` — implementation doesn't require user gate in the current flow. If a different flow wanted a gate after implement, the same agent `.md` would work (just add `requestApproval: true` on the flow step and add `approval:` to the manifest).
 
-### Example — `agents/deploy-prod.md` (hypothetical)
+### Example — `agents/publish-release.md` (hypothetical)
 
 ```yaml
 ---
-id: deploy-prod
+id: publish-release
 version: 1
 tools:
   - bash
@@ -436,12 +444,22 @@ record_gate(answers)
 | Action | Purpose |
 |--------|---------|
 | `list` / `status` | Inspect `.temp/*/workflow.json` |
-| `start` | `flow` + feature input → create `workflow.json` + frozen `flow_snapshot` |
-| `step` | Current `StepInstruction` from agent manifest |
-| `step_complete` | Supervisor submits `success` \| `error` |
+| `start` | `flow` + feature input -> create `workflow.json` + frozen `flow_snapshot`; optional `serviceDirs` seed |
+| `step` | Current `StepInstruction` from agent manifest, including loaded subagent prompts |
+| `step_complete` | Supervisor submits `success` \| `error`; optional `metadata.service_dirs` |
 | `record_gate` | After `ask_user_question` when `requestApproval` |
 
 No orchestration-level knowledge of what a step does.
+
+### 12.1 Implemented v1 hardening
+
+- The extension validates all registered flows and referenced agent manifests at startup.
+- `step()` refuses to advance while a workflow is awaiting a user gate.
+- `step_complete` requires the current step to be `running`.
+- `retryable: false` blocks immediately even when `attempts` remain.
+- Expected output files produce non-blocking warnings when missing after a successful step.
+- Omitting `featurePath` with multiple active workflows raises a clear error.
+- Subagent paths such as `subagents/scout.md` load directly without appending `.md` twice.
 
 ---
 
@@ -481,7 +499,7 @@ No orchestration-level knowledge of what a step does.
 - Reorder pipeline → edit `flows/*.ts` only.
 - Change tools/parallel/subagents/approval → edit `agents/*.md` only.
 - One transition module; no `phase`/`stage` switches.
-- Same engine runs `feature-build` and a hypothetical `deploy-pipeline` without code changes.
+- Same engine can run `feature-build` and a future non-feature flow without code changes.
 - Unit tests: mock supervisor `step_complete` walks any frozen `flow_snapshot`.
 
 ---
@@ -495,3 +513,4 @@ No orchestration-level knowledge of what a step does.
 | 2026-05-24 | Locked decisions §13; frozen flow snapshot; removed async/overrides/when/pending |
 | 2026-05-24 | **Removed `approvalGate` from flow step** — approval UI now owned by agent `.md`; engine is domain-agnostic |
 | 2026-05-24 | **Approval behavior:** post-run only in v1; two-step gate pattern for pre-run choices; fail-fast on missing `approval` block |
+| 2026-05-24 | Implemented full `feature-build` flow, service directory metadata, startup validation, output warnings, and loaded subagent prompts |

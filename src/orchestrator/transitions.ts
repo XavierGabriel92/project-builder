@@ -62,8 +62,12 @@ export function createWorkflowState(
 /** Mark the current step as running. Returns updated state. */
 export function startStep(state: WorkflowState): WorkflowState {
   const next = { ...state, steps: state.steps.map((s) => ({ ...s })) };
+  if (next.status === "awaiting_user") return next;
+
   const step = next.steps[next.current_step_index];
   if (!step) return next;
+  if (step.status === "running") return next;
+  if (step.status !== "pending") return next;
 
   step.status = "running";
   step.started_at = new Date().toISOString();
@@ -118,11 +122,28 @@ export function applyStepResult(
     return { state: next, action: "done" };
   }
 
+  if (next.status === "awaiting_user" || next.awaiting === "user_gate") {
+    return {
+      state: next,
+      action: "block",
+      error: "workflow is awaiting user approval; answer the active gate before completing another step",
+    };
+  }
+
+  if (step.status !== "running") {
+    return {
+      state: next,
+      action: "block",
+      error: `step "${step.agent}" is ${step.status}; call flow_step before submitting a result`,
+    };
+  }
+
   step.result = { ...result };
   step.completed_at = new Date().toISOString();
 
   if (result.result === "success") {
     step.status = "completed";
+    mergeStepMetadata(next, result);
 
     // Check if this step requires user approval
     if (flowStep.requestApproval) {
@@ -151,7 +172,7 @@ export function applyStepResult(
   step.status = "failed";
 
   const maxAttempts = flowStep.attempts ?? DEFAULT_ATTEMPTS;
-  if (step.attempt < maxAttempts) {
+  if (result.retryable !== false && step.attempt < maxAttempts) {
     // Retry — status goes back to pending for re-run
     step.status = "pending";
     return { state: next, action: "retry" };
@@ -184,6 +205,10 @@ export function applyGateAnswer(
   answer: GateAnswer
 ): GateTransition {
   const next = cloneState(state);
+
+  if (next.status !== "awaiting_user" || next.awaiting !== "user_gate" || !next.gate) {
+    return { state: next, action: "block" };
+  }
 
   if (next.current_step_index !== answer.stepIndex) {
     return { state: next, action: "block" };
@@ -230,7 +255,15 @@ function cloneState(state: WorkflowState): WorkflowState {
     steps: state.steps.map((s) => ({ ...s })),
     gate: state.gate ? { ...state.gate, options: [...state.gate.options] } : undefined,
     flow_snapshot: { ...state.flow_snapshot, steps: [...state.flow_snapshot.steps] },
+    service_dirs: state.service_dirs ? [...state.service_dirs] : undefined,
   };
+}
+
+function mergeStepMetadata(state: WorkflowState, result: StepResult): void {
+  const serviceDirs = result.metadata?.service_dirs;
+  if (!serviceDirs) return;
+
+  state.service_dirs = [...new Set(serviceDirs.filter(Boolean))];
 }
 
 function advanceStep(state: WorkflowState): StepTransition {

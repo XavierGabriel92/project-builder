@@ -66,11 +66,11 @@ export function loadAgent(
   agentId: string,
   isSubagent = false
 ): LoadedAgent {
-  const filePath = path.join(agentsDir, `${agentId}.md`);
+  const filePath = resolveAgentPath(agentsDir, agentId);
 
   if (!fs.existsSync(filePath)) {
     throw new Error(
-      `Agent "${agentId}" not found at ${filePath}. Expected agents/${agentId}.md`
+      `Agent "${agentId}" not found at ${filePath}. Expected agents/${agentId.endsWith(".md") ? agentId : `${agentId}.md`}`
     );
   }
 
@@ -99,11 +99,10 @@ export function loadFlowAgents(
     // Load all referenced subagents
     if (agent.manifest.subagents) {
       for (const [name, relativePath] of Object.entries(agent.manifest.subagents)) {
-        const subagentId = path.basename(relativePath, ".md");
-        if (agents.has(subagentId)) continue;
+        if (agents.has(name)) continue;
 
         const sub = loadAgent(agentsDir, relativePath, true);
-        agents.set(subagentId, sub);
+        agents.set(name, sub);
       }
     }
   }
@@ -128,7 +127,7 @@ export function validateFlowApproval(
   for (const step of flow.steps) {
     if (!step.requestApproval) continue;
 
-    const agent = loadAgentWithPath(agentsDir, step.agent);
+    const agent = loadAgent(agentsDir, step.agent);
     const manifest = agent.manifest;
 
     if (!manifest.approval) {
@@ -168,14 +167,8 @@ export function buildGate(
 // Internal parsing
 // ============================================================================
 
-function loadAgentWithPath(agentsDir: string, agentId: string): LoadedAgent {
-  const filePath = path.join(agentsDir, `${agentId}.md`);
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`Agent "${agentId}" not found at ${filePath}`);
-  }
-  const content = fs.readFileSync(filePath, "utf-8");
-  const { frontmatter, body } = parseFrontmatter(content);
-  return parseManifest(frontmatter, body, agentId, false);
+function resolveAgentPath(agentsDir: string, agentId: string): string {
+  return path.join(agentsDir, agentId.endsWith(".md") ? agentId : `${agentId}.md`);
 }
 
 function parseManifest(
@@ -271,6 +264,12 @@ function parseManifest(
     if (!tools.includes("subagent")) {
       throw new Error(
         `Agent "${agentId}" declares parallel execution but "subagent" is not in its tools list`
+      );
+    }
+
+    if (subagents && !subagents[parallelSubagent]) {
+      throw new Error(
+        `Agent "${agentId}" declares parallel_subagent "${parallelSubagent}" but it is not present in subagents`
       );
     }
   }

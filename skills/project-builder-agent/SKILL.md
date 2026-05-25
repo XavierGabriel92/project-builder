@@ -240,7 +240,7 @@ export const myWorkflow: FlowDefinition = {
 };
 ```
 
-Then register it in the extension entry point (`src/extension/index.ts`) by adding it to `flowRegistry` in the `loadFlowRegistry` function, and export it from `flows/index.ts`.
+Then export it from `flows/index.ts` and add it to `allFlows`. The extension builds its registry from `allFlows`.
 
 ---
 
@@ -257,6 +257,8 @@ Before declaring an agent done, verify:
 - [ ] If `approval` declared: `header` is non-empty, `options` has at least one entry, at least one option has `advance: true`
 - [ ] If the flow step has `requestApproval: true`: the agent **must** have an `approval` block (engine rejects at start otherwise)
 - [ ] If the flow step has `attempts > 1`: the agent's prompt should handle re-execution gracefully (idempotent or aware it's a retry)
+- [ ] If the agent declares `outputs`, the prompt instructs the agent to write each output under `.temp/{featurePath}/`
+- [ ] If the agent produces service boundaries, it writes `service-dirs.json` and tells the supervisor to submit `metadata.service_dirs`
 - [ ] The prompt body is clear about what the agent should produce
 
 ### Run the Tests
@@ -305,12 +307,41 @@ steps: [
 
 The `implement` agent `.md` declares `parallel_over` and `parallel_subagent`. The supervisor invokes the agent, which uses the `subagent` tool to fan out workers. If any worker fails, the supervisor can re-run the step (up to `attempts`).
 
+### Pattern: Service Directory Metadata
+
+The `plan` step writes `service-dirs.json`:
+
+```json
+{
+  "service_dirs": ["services/api", "packages/web"]
+}
+```
+
+The supervisor parses that file and submits the same list in `flow_step_complete.metadata.service_dirs`. The engine stores it in `workflow.json.service_dirs`, and later steps use that field for parallel fan-out and reference documentation.
+
+### Current Feature Build Flow
+
+```typescript
+steps: [
+  { agent: "gather-input", requestApproval: true },
+  { agent: "discover" },
+  { agent: "clarify", requestApproval: true },
+  { agent: "spec-write", requestApproval: true },
+  { agent: "research", requestApproval: true },
+  { agent: "plan", requestApproval: true },
+  { agent: "implement", attempts: 3 },
+  { agent: "review", requestApproval: true },
+  { agent: "doc-sync" },
+  { agent: "complete" },
+]
+```
+
 ### Pattern: Retry on Flaky Operations
 
 ```typescript
 steps: [
-  { agent: "run-tests", attempts: 3 },     // flaky test suite? auto-retry
-  { agent: "deploy-prod", requestApproval: true },  // always gate production
+  { agent: "run-checks", attempts: 3 },      // flaky check suite? auto-retry
+  { agent: "publish-release", requestApproval: true },  // always gate releases
 ]
 ```
 
@@ -329,6 +360,8 @@ steps: [
 | `approval block must have at least one option with advance: true` | All options have `advance: false` | Add at least one "approve/proceed" option with `advance: true` |
 | `parallel requires both "parallel_over" and "parallel_subagent"` | Missing one of the two fields | Declare both |
 | `parallel but "subagent" is not in tools` | `parallel_over` declared without `subagent` tool | Add `"subagent"` to `tools` |
+| `parallel_subagent "X" but it is not present in subagents` | Parallel points to an unknown subagent name | Add the subagent mapping or fix the name |
+| `Multiple active workflows found` | `featurePath` was omitted while multiple runs are active | Pass the desired `featurePath` explicitly |
 
 ---
 
