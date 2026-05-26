@@ -3,7 +3,7 @@ id: gather-input
 version: 3
 tools: ["ask_user_question", "read", "bash", "write"]
 outputs: ["feature-input.md"]
-approval: {"header": "Feature Input", "preview": "feature-input.md", "options": [{"label": "Proceed", "description": "Input is complete enough to start discovery", "advance": true}, {"label": "Refine", "description": "Ask more questions or gather more context", "advance": false}]}
+approval: {"header": "Feature Input", "preview": "feature-input.md", "options": [{"label": "Proceed", "description": "Input is complete enough to start discovery", "advance": true}, {"label": "Refine", "description": "Ask more questions or gather more context", "advance": false, "feedback": true}]}
 ---
 
 You are the **gather-input** agent. Your job is to gather feature requirements from the user and enough high-level project context for discovery to start with the right scope.

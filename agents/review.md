@@ -4,7 +4,7 @@ version: 2
 tools: ["read", "subagent", "bash", "write"]
 subagents: {"reviewer": "subagents/reviewer.md"}
 outputs: ["review-findings.md"]
-approval: {"header": "Code Review", "preview": "review-findings.md", "options": [{"label": "Approve", "description": "Changes look good, continue", "advance": true}, {"label": "Request changes", "description": "Revisions needed before continuing", "advance": false}]}
+approval: {"header": "Code Review", "preview": "review-findings.md", "options": [{"label": "Approve", "description": "Changes look good, continue", "advance": true}, {"label": "Request changes", "description": "Revisions needed before continuing", "advance": false, "feedback": true}]}
 ---
 
 You are the **review** agent. Your job is to review all changes made during implementation.

@@ -191,6 +191,7 @@ export function applyStepResult(
 export interface GateTransition {
   state: WorkflowState;
   action: "advance" | "retry" | "block" | "done" | "abort";
+  error?: string;
 }
 
 /**
@@ -211,7 +212,41 @@ export function applyGateAnswer(
   }
 
   if (next.current_step_index !== answer.stepIndex) {
-    return { state: next, action: "block" };
+    return { state: next, action: "block", error: "gate answer does not match the current step" };
+  }
+
+  const chosenOption = next.gate.options.find((opt) => opt.label === answer.chosenLabel);
+  if (!chosenOption) {
+    return {
+      state: next,
+      action: "block",
+      error: `unknown gate option "${answer.chosenLabel}"`,
+    };
+  }
+
+  if (chosenOption.advance !== answer.advance) {
+    return {
+      state: next,
+      action: "block",
+      error: `gate option "${chosenOption.label}" advance value does not match the answer`,
+    };
+  }
+
+  if ((chosenOption.abort ?? false) !== (answer.abort ?? false)) {
+    return {
+      state: next,
+      action: "block",
+      error: `gate option "${chosenOption.label}" abort value does not match the answer`,
+    };
+  }
+
+  const feedback = answer.feedback?.trim();
+  if (chosenOption.feedback && !feedback) {
+    return {
+      state: next,
+      action: "block",
+      error: `gate option "${chosenOption.label}" requires feedback`,
+    };
   }
 
   next.awaiting = null;
@@ -240,6 +275,9 @@ export function applyGateAnswer(
   const step = next.steps[next.current_step_index];
   if (step) {
     step.status = "pending";
+    if (feedback !== undefined) {
+      step.last_feedback = feedback;
+    }
   }
   next.status = "in_progress";
   return { state: next, action: "retry" };

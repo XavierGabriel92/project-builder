@@ -171,6 +171,8 @@ export function step(
       )
     : undefined;
 
+  const currentWsStep = currentWorkflowStep(state);
+
   // Build instruction
   const instruction: StepInstruction = {
     agent: flowStep.agent,
@@ -181,9 +183,10 @@ export function step(
     parallel: loaded.manifest.parallel,
     prompt: loaded.prompt,
     requestApproval: flowStep.requestApproval ?? false,
-    attempt: currentWorkflowStep(state)?.attempt ?? 1,
+    attempt: currentWsStep?.attempt ?? 1,
     maxAttempts: flowStep.attempts ?? 1,
     expectedOutputs: loaded.manifest.outputs,
+    lastFeedback: currentWsStep?.last_feedback,
   };
 
   return instruction;
@@ -281,6 +284,8 @@ export interface GateResult {
   action: GateTransition["action"];
   /** Whether the workflow was aborted via gate */
   aborted?: boolean;
+  /** Present when the gate answer could not be applied */
+  error?: string;
 }
 
 /**
@@ -309,6 +314,7 @@ export function recordGate(
     featurePath: resolved.featurePath,
     action: transition.action,
     aborted: transition.action === "abort",
+    error: transition.error,
   };
 }
 

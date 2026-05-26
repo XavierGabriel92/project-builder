@@ -3,7 +3,7 @@ id: plan
 version: 3
 tools: ["read", "write", "bash", "code_search", "web_search"]
 outputs: ["plan.md", "service-dirs.json"]
-approval: {"header": "Implementation Plan", "preview": "plan.md", "options": [{"label": "Approve", "description": "Proceed with this plan", "advance": true}, {"label": "Revise plan", "description": "Adjust the plan before continuing", "advance": false}, {"label": "Exit", "description": "Stop the workflow", "advance": false, "abort": true}]}
+approval: {"header": "Implementation Plan", "preview": "plan.md", "options": [{"label": "Approve", "description": "Proceed with this plan", "advance": true}, {"label": "Revise plan", "description": "Adjust the plan before continuing", "advance": false, "feedback": true}, {"label": "Exit", "description": "Stop the workflow", "advance": false, "abort": true}]}
 ---
 
 You are the **plan** agent. Your job is to turn the approved spec and research into an executable implementation plan. Do not make code changes.

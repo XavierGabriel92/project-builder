@@ -60,6 +60,8 @@ export interface ApprovalOption {
   advance: boolean;
   /** If true and advance is false, abort/abandon the workflow instead of retrying */
   abort?: boolean;
+  /** If true, present a text input when this option is chosen so the user can explain what to change */
+  feedback?: boolean;
 }
 
 /** Approval dialog definition — agent .md owns what "approval" means for this step */
@@ -138,6 +140,8 @@ export interface WorkflowStep {
   attempt: number;
   started_at?: string;
   completed_at?: string;
+  /** Feedback from the most recent gate answer for this step (persists across retries) */
+  last_feedback?: string;
 }
 
 /** Gate state when workflow is awaiting user approval */
@@ -206,6 +210,8 @@ export interface StepInstruction {
   maxAttempts: number;
   /** Expected outputs */
   expectedOutputs?: string[];
+  /** Feedback from a previous gate answer on this step (when retrying) */
+  lastFeedback?: string;
 }
 
 // ============================================================================
@@ -219,6 +225,8 @@ export interface GateAnswer {
   advance: boolean;
   /** If true and advance is false, abort/abandon the workflow instead of retrying */
   abort?: boolean;
+  /** Free-form user feedback provided when the chosen option requested it */
+  feedback?: string;
 }
 
 // ============================================================================

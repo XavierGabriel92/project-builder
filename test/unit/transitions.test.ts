@@ -39,6 +39,17 @@ function testGate(stepIndex: number): WorkflowGate {
   };
 }
 
+function feedbackGate(stepIndex: number): WorkflowGate {
+  return {
+    header: "Approve?",
+    options: [
+      { label: "Approve", description: "Proceed", advance: true },
+      { label: "Request changes", description: "Go back", advance: false, feedback: true },
+    ],
+    stepIndex,
+  };
+}
+
 describe("createWorkflowState", () => {
   it("creates initial state with all steps pending", () => {
     const state = createWorkflowState(testFlow(), "test-feat", "01-01-2024-test-feat", "/project");
@@ -306,6 +317,67 @@ describe("applyGateAnswer", () => {
 
     assert.equal(transition.action, "retry");
     assert.equal(transition.state.steps[1].status, "pending");
+  });
+
+  it("persists feedback on the step when advance is false", () => {
+    let state = createWorkflowState(testFlow(), "feat", "path", "/project");
+    state.current_step_index = 1;
+    state.status = "awaiting_user";
+    state.awaiting = "user_gate";
+    state.gate = testGate(1);
+    state.steps[1].status = "completed";
+
+    const transition = applyGateAnswer(state, {
+      stepIndex: 1,
+      chosenLabel: "No",
+      advance: false,
+      feedback: "Please add more details",
+    });
+
+    assert.equal(transition.action, "retry");
+    assert.equal(transition.state.steps[1].status, "pending");
+    assert.equal(transition.state.steps[1].last_feedback, "Please add more details");
+  });
+
+  it("keeps the gate open when a feedback option has no feedback", () => {
+    let state = createWorkflowState(testFlow(), "feat", "path", "/project");
+    state.current_step_index = 1;
+    state.status = "awaiting_user";
+    state.awaiting = "user_gate";
+    state.gate = feedbackGate(1);
+    state.steps[1].status = "completed";
+
+    const transition = applyGateAnswer(state, {
+      stepIndex: 1,
+      chosenLabel: "Request changes",
+      advance: false,
+    });
+
+    assert.equal(transition.action, "block");
+    assert.match(transition.error ?? "", /requires feedback/);
+    assert.equal(transition.state.status, "awaiting_user");
+    assert.equal(transition.state.awaiting, "user_gate");
+    assert.equal(transition.state.steps[1].status, "completed");
+  });
+
+  it("stores trimmed feedback for feedback options", () => {
+    let state = createWorkflowState(testFlow(), "feat", "path", "/project");
+    state.current_step_index = 1;
+    state.status = "awaiting_user";
+    state.awaiting = "user_gate";
+    state.gate = feedbackGate(1);
+    state.steps[1].status = "completed";
+
+    const transition = applyGateAnswer(state, {
+      stepIndex: 1,
+      chosenLabel: "Request changes",
+      advance: false,
+      feedback: "  Please add tests  ",
+    });
+
+    assert.equal(transition.action, "retry");
+    assert.equal(transition.state.steps[1].status, "pending");
+    assert.equal(transition.state.steps[1].last_feedback, "Please add tests");
   });
 
   it("marks done when last step is gated and approved", () => {

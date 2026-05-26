@@ -168,7 +168,8 @@ If a main agent declares `parallel_over` / `parallel_subagent`, it **must** incl
     {
       "label": "Request changes",
       "description": "Re-run this step",
-      "advance": false
+      "advance": false,
+      "feedback": true
     },
     {
       "label": "Exit",
@@ -185,6 +186,7 @@ If a main agent declares `parallel_over` / `parallel_subagent`, it **must** incl
 - `advance: true` → flow proceeds to next step.
 - `advance: false` (without `abort`) → step resets for re-run.
 - `advance: false` + `abort: true` → workflow is abandoned immediately.
+- `feedback: true` → when the user picks this option, a text input appears so they can explain what to change. The feedback is persisted on the step and returned to the supervisor in `StepInstruction.lastFeedback` on retry.
 - If the flow step has `requestApproval: true` but the agent has no `approval` block → **engine rejects at `start` time**.
 
 ---

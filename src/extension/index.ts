@@ -13,7 +13,7 @@ import * as path from "node:path";
 import { Type } from "typebox";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Container, Text, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { Container, Text, truncateToWidth, visibleWidth, Editor, type EditorTheme, matchesKey, Key, type Focusable, CURSOR_MARKER, type Component, type TUI } from "@earendil-works/pi-tui";
 
 import { initEngine, validateFlows, start, step, stepComplete, recordGate, status, abort, list } from "../orchestrator/engine.ts";
 import { allFlows } from "../../flows/index.ts";
@@ -102,8 +102,10 @@ function workflowHasRunningStep(state: import("../shared/types.ts").WorkflowStat
   return state?.steps.some((step) => step.status === "running") ?? false;
 }
 
-function currentRunningStep(state: import("../shared/types.ts").WorkflowState): import("../shared/types.ts").WorkflowStep | undefined {
-  return state.steps.find((step) => step.index === state.current_step_index && step.status === "running");
+function currentRunnableStep(state: import("../shared/types.ts").WorkflowState): import("../shared/types.ts").WorkflowStep | undefined {
+  return state.steps.find((step) =>
+    step.index === state.current_step_index && (step.status === "pending" || step.status === "running")
+  );
 }
 
 function fitWidgetLine(line: string, width: number): string {
@@ -111,23 +113,218 @@ function fitWidgetLine(line: string, width: number): string {
   return visibleWidth(line) > maxWidth ? truncateToWidth(line, maxWidth) : line;
 }
 
-function buildResumePrompt(projectRoot: string, state: import("../shared/types.ts").WorkflowState): string {
-  const running = currentRunningStep(state);
-  const stepLabel = running
-    ? `Step ${running.index + 1}: ${running.agent}`
+function buildContinuePrompt(projectRoot: string, state: import("../shared/types.ts").WorkflowState): string {
+  const runnable = currentRunnableStep(state);
+  const stepLabel = runnable
+    ? `Step ${runnable.index + 1}: ${runnable.agent}`
     : `current step ${state.current_step_index + 1}`;
+  const resumeReason = runnable?.status === "running"
+    ? `The previous Pi session was interrupted while ${stepLabel} was marked running.`
+    : `The workflow is ready to continue at ${stepLabel}.`;
 
   return [
-    `Resume the active project-builder workflow "${state.feature}" at ${state.feature_path}.`,
+    `Continue the active project-builder workflow "${state.feature}" at ${state.feature_path}.`,
     "",
-    `The previous Pi session was interrupted while ${stepLabel} was marked running.`,
-    "Call `flow_step` with this exact workflow path to retrieve the current step instructions again, then execute that step.",
-    "When the step is complete, call `flow_step_complete` with the result so the workflow can advance.",
+    resumeReason,
+    "Use the project-builder-supervisor runtime loop:",
+    "1. Call `flow_step` with this exact workflow path.",
+    "2. Execute the returned step instructions and write the expected outputs.",
+    "3. Call `flow_step_complete` with the truthful result.",
+    "4. Repeat from `flow_step` until the workflow is done, blocked, awaiting user approval, or you need user input.",
     "",
     "Use these tool arguments:",
     `- projectRoot: ${projectRoot}`,
     `- featurePath: ${state.feature_path}`,
   ].join("\n");
+}
+
+async function promptGateAnswer(
+  ctx: ExtensionContext,
+  projectRoot: string,
+  featurePath: string,
+  gate: import("../shared/types.ts").WorkflowGate
+): Promise<import("../shared/types.ts").GateAnswer> {
+  return await ctx.ui.custom<import("../shared/types.ts").GateAnswer>((tui, theme, _kb, done) => {
+    let selectedIndex = 0;
+    let mode: "select" | "feedback" = "select";
+    let chosenOption: import("../shared/types.ts").ApprovalOption | undefined;
+    let cachedLines: string[] | undefined;
+
+    const editorTheme: EditorTheme = {
+      borderColor: (s: string) => theme.fg("accent", s),
+      selectList: {
+        selectedPrefix: (t: string) => theme.fg("accent", t),
+        selectedText: (t: string) => theme.fg("accent", t),
+        description: (t: string) => theme.fg("muted", t),
+        scrollInfo: (t: string) => theme.fg("dim", t),
+        noMatch: (t: string) => theme.fg("warning", t),
+      },
+    };
+    const editor = new Editor(tui, editorTheme);
+    editor.setText("");
+    let feedbackError: string | undefined;
+    editor.onSubmit = (value: string) => {
+      if (!chosenOption) return;
+      if (chosenOption.feedback && !value.trim()) {
+        feedbackError = "Feedback is required for this option.";
+        refresh();
+        return;
+      }
+      done({
+        stepIndex: gate.stepIndex,
+        chosenLabel: chosenOption.label,
+        advance: chosenOption.advance,
+        abort: chosenOption.abort ?? false,
+        feedback: value.trim() || undefined,
+      });
+    };
+
+    // Focusable interface - propagate focus to editor for IME cursor positioning
+    let _focused = false;
+
+    function refresh() {
+      cachedLines = undefined;
+      tui.requestRender();
+    }
+
+    function render(width: number): string[] {
+      if (cachedLines && mode === "select") return cachedLines;
+
+      const lines: string[] = [];
+      lines.push(theme.fg("accent", "─".repeat(width)));
+      lines.push(truncateToWidth(` ${theme.fg("accent", theme.bold(`⛔ ${gate.header}`))}`, width));
+
+      if (gate.preview) {
+        const previewPath = path.join(projectRoot, ".temp", featurePath, gate.preview);
+        if (fs.existsSync(previewPath)) {
+          const previewText = fs.readFileSync(previewPath, "utf-8").split("\n").slice(0, 30).join("\n");
+          lines.push("");
+          for (const line of previewText.split("\n")) {
+            lines.push(truncateToWidth(` ${line}`, width));
+          }
+        }
+      }
+
+      lines.push("");
+
+      if (mode === "select") {
+        for (let i = 0; i < gate.options.length; i++) {
+          const opt = gate.options[i];
+          const selected = i === selectedIndex;
+          const prefix = selected ? theme.fg("accent", "> ") : "  ";
+          const color = selected ? "accent" : "text";
+          lines.push(truncateToWidth(`${prefix}${theme.fg(color, opt.label)}`, width));
+          if (opt.description) {
+            lines.push(truncateToWidth(`     ${theme.fg("muted", opt.description)}`, width));
+          }
+        }
+        lines.push("");
+        lines.push(truncateToWidth(theme.fg("dim", " ↑↓ navigate • Enter select • Esc cancel"), width));
+      } else {
+        lines.push(truncateToWidth(` ${theme.fg("text", `Selected: ${chosenOption!.label}`)}`, width));
+        lines.push("");
+        lines.push(truncateToWidth(theme.fg("muted", " Provide feedback (what should change):"), width));
+        for (const line of editor.render(width - 2)) {
+          lines.push(truncateToWidth(` ${line}`, width));
+        }
+        if (feedbackError) {
+          lines.push(truncateToWidth(` ${theme.fg("warning", feedbackError)}`, width));
+        }
+        lines.push("");
+        lines.push(truncateToWidth(theme.fg("dim", " Enter to submit • Esc to go back"), width));
+      }
+
+      lines.push(theme.fg("accent", "─".repeat(width)));
+      cachedLines = lines;
+      return lines;
+    }
+
+    function handleInput(data: string): void {
+      if (mode === "select") {
+        if (matchesKey(data, Key.up) && selectedIndex > 0) {
+          selectedIndex--;
+          cachedLines = undefined;
+          tui.requestRender();
+          return;
+        }
+        if (matchesKey(data, Key.down) && selectedIndex < gate.options.length - 1) {
+          selectedIndex++;
+          cachedLines = undefined;
+          tui.requestRender();
+          return;
+        }
+        if (matchesKey(data, Key.enter)) {
+          const opt = gate.options[selectedIndex];
+          if (!opt) return;
+          if (opt.feedback) {
+            chosenOption = opt;
+            mode = "feedback";
+            editor.setText("");
+            feedbackError = undefined;
+            cachedLines = undefined;
+            tui.requestRender();
+          } else {
+            done({
+              stepIndex: gate.stepIndex,
+              chosenLabel: opt.label,
+              advance: opt.advance,
+              abort: opt.abort ?? false,
+            });
+          }
+          return;
+        }
+        if (matchesKey(data, Key.escape)) {
+          done({
+            stepIndex: gate.stepIndex,
+            chosenLabel: "cancelled",
+            advance: false,
+            abort: false,
+          });
+          return;
+        }
+      } else {
+        if (matchesKey(data, Key.escape)) {
+          mode = "select";
+          chosenOption = undefined;
+          editor.setText("");
+          feedbackError = undefined;
+          cachedLines = undefined;
+          tui.requestRender();
+          return;
+        }
+        editor.handleInput(data);
+        feedbackError = undefined;
+        cachedLines = undefined;
+        tui.requestRender();
+      }
+    }
+
+    return {
+      render,
+      invalidate: () => {
+        cachedLines = undefined;
+        editor.invalidate();
+      },
+      handleInput,
+      get focused() {
+        return _focused;
+      },
+      set focused(value: boolean) {
+        _focused = value;
+        editor.focused = value;
+      },
+    };
+  }, { overlay: true });
+}
+
+async function promptAndRecordGate(
+  ctx: ExtensionContext,
+  projectRoot: string,
+  featurePath: string,
+  gate: import("../shared/types.ts").WorkflowGate
+): Promise<import("../orchestrator/engine.ts").GateResult | null> {
+  const answer = await promptGateAnswer(ctx, projectRoot, featurePath, gate);
+  return recordGate(answer, projectRoot, featurePath);
 }
 
 function buildWorkflowWidget(projectRoot: string, featurePath?: string): (tui: TUI, theme: ExtensionContext["ui"]["theme"]) => Component & { dispose?(): void } {
@@ -377,6 +574,9 @@ export default function (pi: ExtensionAPI) {
           instruction.expectedOutputs?.length
             ? `Expected outputs: ${instruction.expectedOutputs.join(", ")}`
             : "",
+          instruction.lastFeedback
+            ? `Previous feedback: ${instruction.lastFeedback}`
+            : "",
           "",
           "---",
           "",
@@ -492,25 +692,11 @@ export default function (pi: ExtensionAPI) {
                 lines.push(...previewLines);
                 lines.push("");
               }
-              const gateOptions = outcome.gate.options.map((o) => o.label);
-              const chosenLabel = await ctx.ui.select(
-                `Approve: ${outcome.gate.header}`,
-                gateOptions
-              );
-
-              const chosenOption = chosenLabel
-                ? outcome.gate.options.find((o) => o.label === chosenLabel)
-                : undefined;
-
-              const gateResult = recordGate(
-                {
-                  stepIndex: outcome.gate.stepIndex,
-                  chosenLabel: chosenLabel ?? "cancelled",
-                  advance: chosenOption?.advance ?? false,
-                  abort: chosenOption?.abort ?? false,
-                },
+              const gateResult = await promptAndRecordGate(
+                ctx,
                 projectRoot,
-                params.featurePath
+                outcome.featurePath,
+                outcome.gate
               );
 
               if (gateResult) {
@@ -519,10 +705,18 @@ export default function (pi: ExtensionAPI) {
                   lines.push("→ Approved — advancing to next step.");
                 } else if (gateResult.action === "retry") {
                   lines.push("↻ Changes requested — step will re-run.");
+                  const feedback = gateResult.state.steps[outcome.gate.stepIndex]?.last_feedback;
+                  if (feedback) {
+                    lines.push("");
+                    lines.push("Feedback:");
+                    lines.push(feedback);
+                  }
                 } else if (gateResult.action === "done") {
                   lines.push("🎉 Workflow complete!");
                 } else if (gateResult.action === "abort") {
                   lines.push("🛑 Workflow aborted.");
+                } else if (gateResult.action === "block") {
+                  lines.push(`❌ Gate answer blocked: ${gateResult.error ?? "invalid gate answer"}`);
                 } else {
                   lines.push("❌ Failed to record gate answer.");
                 }
@@ -546,12 +740,17 @@ export default function (pi: ExtensionAPI) {
             lines.push(...renderGatePreview(projectRoot, outcome.featurePath, outcome.gate!));
             lines.push("");
             for (const opt of outcome.gate!.options) {
+              const suffixes = [
+                opt.advance ? "advances" : "",
+                opt.feedback ? "requires feedback" : "",
+                opt.abort ? "aborts" : "",
+              ].filter(Boolean);
               lines.push(
-                `  - **${opt.label}**${opt.advance ? " (advances)" : ""}: ${opt.description}`
+                `  - **${opt.label}**${suffixes.length ? ` (${suffixes.join(", ")})` : ""}: ${opt.description}`
               );
             }
             lines.push("");
-            lines.push("Use `flow_record_gate` to answer.");
+            lines.push("Use `flow_record_gate` to answer. For options marked `requires feedback`, include the `feedback` text.");
             break;
           }
           case "block":
@@ -590,20 +789,21 @@ export default function (pi: ExtensionAPI) {
     name: "flow_record_gate",
     label: "Record Gate Answer",
     description:
-      "Answer an approval gate. If the chosen option has advance: true, the flow moves to the next step. Otherwise, the current step is reset for re-run.",
+      "Answer an approval gate. If the chosen option has advance: true, the flow moves to the next step. Otherwise, the current step is reset for re-run. Options marked feedback: true require a non-empty feedback string.",
     promptSnippet:
       "Answer an approval gate in an active workflow",
     parameters: Type.Object({
       advance: Type.Boolean({ description: "Whether the chosen option means 'approved' (should match the agent's advance field)" }),
       chosenLabel: Type.Optional(Type.String({ description: "Label of the chosen option (for logging)" })),
       abort: Type.Optional(Type.Boolean({ description: "Whether this non-advance answer should abandon the workflow" })),
+      feedback: Type.Optional(Type.String({ description: "Free-form feedback when the chosen option supports it" })),
       featurePath: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String()),
     }),
     renderResult: renderProjectBuilderToolResult,
     async execute(
       _toolCallId: string,
-      params: { advance: boolean; chosenLabel?: string; abort?: boolean; featurePath?: string; projectRoot?: string },
+      params: { advance: boolean; chosenLabel?: string; abort?: boolean; feedback?: string; featurePath?: string; projectRoot?: string },
       _signal: AbortSignal | undefined,
       _onUpdate: unknown,
       ctx: ExtensionContext
@@ -632,26 +832,33 @@ export default function (pi: ExtensionAPI) {
         let actualAdvance = params.advance;
         let actualLabel = params.chosenLabel ?? "answered";
         let actualAbort = params.abort ?? false;
+        let actualFeedback: string | undefined = params.feedback;
 
         if (ctx.hasUI) {
-          const previewLines = renderGatePreview(projectRoot, state.feature_path, state.gate);
-          if (previewLines.length > 0) {
-            ctx.ui.notify(previewLines.join("\n"), "info");
-          }
+          const answer = await promptGateAnswer(ctx, projectRoot, state.feature_path, state.gate);
+          actualAdvance = answer.advance;
+          actualAbort = answer.abort ?? false;
+          actualLabel = answer.chosenLabel;
+          actualFeedback = answer.feedback;
+        }
 
-          const gateOptions = state.gate.options.map((o) => o.label);
-          const chosenLabel = await ctx.ui.select(
-            `Approve: ${state.gate.header}`,
-            gateOptions
+        if (!ctx.hasUI && !params.chosenLabel) {
+          const matches = state.gate.options.filter(
+            (opt) => opt.advance === actualAdvance && (opt.abort ?? false) === actualAbort
           );
-
-          const chosenOption = chosenLabel
-            ? state.gate.options.find((o) => o.label === chosenLabel)
-            : undefined;
-
-          actualAdvance = chosenOption?.advance ?? false;
-          actualAbort = chosenOption?.abort ?? false;
-          actualLabel = chosenLabel ?? "cancelled";
+          if (matches.length === 1) {
+            actualLabel = matches[0].label;
+          } else {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Multiple gate options match that answer. Pass `chosenLabel` with the exact option label.",
+                },
+              ],
+              details: { isError: true },
+            };
+          }
         }
 
         const outcome = recordGate(
@@ -660,6 +867,7 @@ export default function (pi: ExtensionAPI) {
             chosenLabel: actualLabel,
             advance: actualAdvance,
             abort: actualAbort,
+            feedback: actualFeedback,
           },
           projectRoot,
           params.featurePath
@@ -680,10 +888,18 @@ export default function (pi: ExtensionAPI) {
           lines.push("→ Advancing to next step.");
         } else if (outcome.action === "retry") {
           lines.push("↻ Same step will re-run.");
+          const feedback = outcome.state.steps[state.gate.stepIndex]?.last_feedback;
+          if (feedback) {
+            lines.push("");
+            lines.push("Feedback:");
+            lines.push(feedback);
+          }
         } else if (outcome.action === "done") {
           lines.push("🎉 Workflow complete!");
         } else if (outcome.action === "abort") {
           lines.push("🛑 Workflow aborted.");
+        } else if (outcome.action === "block") {
+          lines.push(`❌ Gate answer blocked: ${outcome.error ?? "invalid gate answer"}`);
         }
 
         lines.push("");
@@ -867,6 +1083,15 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args: string, ctx) => {
       const projectRoot = getProjectRoot();
       const active = status(projectRoot);
+      const continueIfRunnable = (state: import("../shared/types.ts").WorkflowState): void => {
+        if (state.status !== "in_progress" || !currentRunnableStep(state)) return;
+        if (ctx.isIdle() && !ctx.hasPendingMessages()) {
+          ctx.ui.notify("Continuing active workflow...", "info");
+          pi.sendUserMessage(buildContinuePrompt(projectRoot, state));
+        } else {
+          ctx.ui.notify("Workflow is active; Pi is busy, so continue was not started.", "warning");
+        }
+      };
 
       if (active) {
         syncWorkflowWidget(ctx, projectRoot, active.feature_path);
@@ -874,14 +1099,26 @@ export default function (pi: ExtensionAPI) {
           renderStaticWorkflowStatus(active).join("\n"),
           "info"
         );
-        if (currentRunningStep(active)) {
-          if (ctx.isIdle() && !ctx.hasPendingMessages()) {
-            ctx.ui.notify("Resuming interrupted workflow step...", "info");
-            pi.sendUserMessage(buildResumePrompt(projectRoot, active));
-          } else {
-            ctx.ui.notify("Workflow step is marked running; Pi is busy, so resume was not started.", "warning");
+
+        if (active.status === "awaiting_user" && active.gate) {
+          const previewLines = renderGatePreview(projectRoot, active.feature_path, active.gate);
+          if (previewLines.length > 0) {
+            ctx.ui.notify(previewLines.join("\n"), "info");
           }
+
+          const gateResult = await promptAndRecordGate(ctx, projectRoot, active.feature_path, active.gate);
+          if (!gateResult) {
+            ctx.ui.notify("Failed to record gate answer.", "error");
+            return;
+          }
+
+          syncWorkflowWidget(ctx, projectRoot, gateResult.featurePath);
+          ctx.ui.notify(renderStaticWorkflowStatus(gateResult.state).join("\n"), "info");
+          continueIfRunnable(gateResult.state);
+          return;
         }
+
+        continueIfRunnable(active);
       } else {
         ctx.ui.notify(
           `No active workflow. Available flows: ${[...flowRegistry.keys()].join(", ")}`,

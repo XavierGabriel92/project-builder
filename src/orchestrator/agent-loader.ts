@@ -303,6 +303,14 @@ function parseManifest(
           `Agent "${agentId}" approval block must have at least one option with advance: true`
         );
       }
+
+      for (const opt of approval.options) {
+        if (opt.feedback !== undefined && typeof opt.feedback !== "boolean") {
+          throw new Error(
+            `Agent "${agentId}" approval option "${opt.label}" has invalid feedback value (must be boolean)`
+          );
+        }
+      }
     } catch (err) {
       if (err instanceof SyntaxError) {
         throw new Error(

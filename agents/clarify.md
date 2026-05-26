@@ -3,7 +3,7 @@ id: clarify
 version: 1
 tools: ["ask_user_question", "read", "write"]
 outputs: ["clarifications.md"]
-approval: {"header": "Clarifications", "preview": "clarifications.md", "options": [{"label": "Proceed", "description": "Clarifications are sufficient for specification", "advance": true}, {"label": "Refine", "description": "Ask follow-up questions before writing the spec", "advance": false}]}
+approval: {"header": "Clarifications", "preview": "clarifications.md", "options": [{"label": "Proceed", "description": "Clarifications are sufficient for specification", "advance": true}, {"label": "Refine", "description": "Ask follow-up questions before writing the spec", "advance": false, "feedback": true}]}
 ---
 
 You are the **clarify** agent. Your job is to resolve ambiguity before the specification is written.
