@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { Type } from "typebox";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Container, Text, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 
 import { initEngine, validateFlows, start, step, stepComplete, recordGate, status, abort, list } from "../orchestrator/engine.ts";
 import { allFlows } from "../../flows/index.ts";
@@ -33,6 +34,135 @@ let flowRegistry: Map<string, FlowRegistryEntry> = new Map();
 
 function getProjectRoot(): string {
   return process.cwd();
+}
+
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const LOADING_ICON = SPINNER[0]!;
+const LOADING_LABEL = "Working...";
+const LOADING_ANIMATION_MS = 80;
+const WORKFLOW_WIDGET_KEY = "project-builder.workflow";
+
+interface ResultAnimationContext {
+  state: { projectBuilderResultAnimationTimer?: ReturnType<typeof setInterval> };
+  invalidate: () => void;
+}
+
+function spinnerFrame(): string {
+  return SPINNER[Math.floor(Date.now() / LOADING_ANIMATION_MS) % SPINNER.length]!;
+}
+
+function textContent(result: AgentToolResult): string {
+  return result.content
+    .map((part) => part.type === "text" ? part.text : "")
+    .join("\n");
+}
+
+function resultHasLoadingState(result: AgentToolResult): boolean {
+  return textContent(result).includes(`[${LOADING_LABEL}]`);
+}
+
+function stopResultAnimation(context: ResultAnimationContext): void {
+  const timer = context.state.projectBuilderResultAnimationTimer;
+  if (!timer) return;
+  clearInterval(timer);
+  context.state.projectBuilderResultAnimationTimer = undefined;
+}
+
+function syncResultAnimation(result: AgentToolResult, context: ResultAnimationContext): void {
+  if (!resultHasLoadingState(result)) {
+    stopResultAnimation(context);
+    return;
+  }
+  if (context.state.projectBuilderResultAnimationTimer) return;
+  const timer = setInterval(() => context.invalidate(), LOADING_ANIMATION_MS);
+  timer.unref?.();
+  context.state.projectBuilderResultAnimationTimer = timer;
+}
+
+function renderFlowResult(result: AgentToolResult, context: ResultAnimationContext): Text {
+  syncResultAnimation(result, context);
+  const component = new Text("", 0, 0);
+  component.render = (width: number) => {
+    const text = textContent(result).replaceAll(LOADING_ICON, spinnerFrame());
+    return new Text(text, 0, 0).render(width);
+  };
+  return component;
+}
+
+function renderProjectBuilderToolResult(
+  result: AgentToolResult,
+  _options: unknown,
+  _theme: ExtensionContext["ui"]["theme"],
+  context: ResultAnimationContext
+): Text {
+  return renderFlowResult(result, context);
+}
+
+function workflowHasRunningStep(state: import("../shared/types.ts").WorkflowState | null | undefined): boolean {
+  return state?.steps.some((step) => step.status === "running") ?? false;
+}
+
+function currentRunningStep(state: import("../shared/types.ts").WorkflowState): import("../shared/types.ts").WorkflowStep | undefined {
+  return state.steps.find((step) => step.index === state.current_step_index && step.status === "running");
+}
+
+function fitWidgetLine(line: string, width: number): string {
+  const maxWidth = Math.max(1, width);
+  return visibleWidth(line) > maxWidth ? truncateToWidth(line, maxWidth) : line;
+}
+
+function buildResumePrompt(projectRoot: string, state: import("../shared/types.ts").WorkflowState): string {
+  const running = currentRunningStep(state);
+  const stepLabel = running
+    ? `Step ${running.index + 1}: ${running.agent}`
+    : `current step ${state.current_step_index + 1}`;
+
+  return [
+    `Resume the active project-builder workflow "${state.feature}" at ${state.feature_path}.`,
+    "",
+    `The previous Pi session was interrupted while ${stepLabel} was marked running.`,
+    "Call `flow_step` with this exact workflow path to retrieve the current step instructions again, then execute that step.",
+    "When the step is complete, call `flow_step_complete` with the result so the workflow can advance.",
+    "",
+    "Use these tool arguments:",
+    `- projectRoot: ${projectRoot}`,
+    `- featurePath: ${state.feature_path}`,
+  ].join("\n");
+}
+
+function buildWorkflowWidget(projectRoot: string, featurePath?: string): (tui: TUI, theme: ExtensionContext["ui"]["theme"]) => Component & { dispose?(): void } {
+  return (tui, theme) => {
+    const component = new Container() as Component & { dispose?(): void };
+    const timer = setInterval(() => tui.requestRender(), LOADING_ANIMATION_MS);
+    timer.unref?.();
+    component.dispose = () => clearInterval(timer);
+    component.render = (width: number) => {
+      const current = status(projectRoot, featurePath);
+      if (!current || !workflowHasRunningStep(current)) return [];
+      return renderWorkflowStatus(current)
+        .join("\n")
+        .replaceAll(LOADING_ICON, theme.fg("accent", spinnerFrame()))
+        .split("\n")
+        .map((line) => fitWidgetLine(line, width));
+    };
+    return component;
+  };
+}
+
+function syncWorkflowWidget(ctx: ExtensionContext | undefined, projectRoot: string, featurePath?: string): void {
+  if (!ctx?.hasUI) return;
+  const current = status(projectRoot, featurePath);
+  if (!workflowHasRunningStep(current)) {
+    ctx.ui.setWidget(WORKFLOW_WIDGET_KEY, undefined);
+    return;
+  }
+  ctx.ui.setWorkingMessage(LOADING_LABEL);
+  ctx.ui.setWorkingIndicator({ frames: SPINNER, intervalMs: LOADING_ANIMATION_MS });
+  ctx.ui.setWidget(WORKFLOW_WIDGET_KEY, buildWorkflowWidget(projectRoot, current?.feature_path ?? featurePath));
+}
+
+function renderStaticWorkflowStatus(state: import("../shared/types.ts").WorkflowState): string[] {
+  return renderWorkflowStatus(state).map((line) => line.replaceAll(LOADING_ICON, "•"));
 }
 
 function formatStepStatus(icon: string, label: string, detail?: string): string {
@@ -59,7 +189,7 @@ function renderWorkflowStatus(state: import("../shared/types.ts").WorkflowState)
         icon = "❌";
         break;
       case "running":
-        icon = "🔄";
+        icon = LOADING_ICON;
         break;
       default:
         icon = "⏳";
@@ -68,7 +198,8 @@ function renderWorkflowStatus(state: import("../shared/types.ts").WorkflowState)
       ? ` — ${step.result.result}: ${step.result.message.slice(0, 60)}`
       : "";
     const attemptText = step.attempt > 1 ? ` (attempt ${step.attempt})` : "";
-    lines.push(`${marker} ${icon} Step ${step.index + 1}: ${step.agent} [${step.status}]${attemptText}${resultText}`);
+    const statusText = step.status === "running" ? LOADING_LABEL : step.status;
+    lines.push(`${marker} ${icon} Step ${step.index + 1}: ${step.agent} [${statusText}]${attemptText}${resultText}`);
   }
 
   if (state.gate) {
@@ -150,9 +281,13 @@ export default function (pi: ExtensionAPI) {
       serviceDirs: Type.Optional(Type.Array(Type.String({ description: "Service directories touched by the flow" }))),
       projectRoot: Type.Optional(Type.String({ description: "Project root directory (defaults to current working directory)" })),
     }),
+    renderResult: renderProjectBuilderToolResult,
     async execute(
       _toolCallId: string,
-      params: { flowId: string; featureName: string; serviceDirs?: string[]; projectRoot?: string }
+      params: { flowId: string; featureName: string; serviceDirs?: string[]; projectRoot?: string },
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext
     ): Promise<AgentToolResult> {
       const projectRoot = params.projectRoot || getProjectRoot();
       const entry = flowRegistry.get(params.flowId);
@@ -170,6 +305,7 @@ export default function (pi: ExtensionAPI) {
 
       try {
         const result = start(entry.definition, params.featureName, projectRoot, params.serviceDirs);
+        syncWorkflowWidget(ctx, projectRoot, result.featurePath);
         const lines = renderWorkflowStatus(result.state);
         return {
           content: [{ type: "text", text: lines.join("\n") }],
@@ -205,12 +341,16 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(
       _toolCallId: string,
-      params: { featurePath?: string; projectRoot?: string }
+      params: { featurePath?: string; projectRoot?: string },
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext
     ): Promise<AgentToolResult> {
       const projectRoot = params.projectRoot || getProjectRoot();
 
       try {
         const instruction = step(projectRoot, params.featurePath);
+        syncWorkflowWidget(ctx, projectRoot, params.featurePath);
         if (!instruction) {
           return {
             content: [
@@ -288,6 +428,7 @@ export default function (pi: ExtensionAPI) {
       featurePath: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String()),
     }),
+    renderResult: renderProjectBuilderToolResult,
     async execute(
       _toolCallId: string,
       params: {
@@ -322,6 +463,7 @@ export default function (pi: ExtensionAPI) {
             details: {},
           };
         }
+        syncWorkflowWidget(ctx, projectRoot, outcome.featurePath);
 
         const lines: string[] = [];
         lines.push(`Step result: **${params.result}**`);
@@ -372,6 +514,7 @@ export default function (pi: ExtensionAPI) {
               );
 
               if (gateResult) {
+                syncWorkflowWidget(ctx, projectRoot, gateResult.featurePath);
                 if (gateResult.action === "advance") {
                   lines.push("→ Approved — advancing to next step.");
                 } else if (gateResult.action === "retry") {
@@ -457,6 +600,7 @@ export default function (pi: ExtensionAPI) {
       featurePath: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String()),
     }),
+    renderResult: renderProjectBuilderToolResult,
     async execute(
       _toolCallId: string,
       params: { advance: boolean; chosenLabel?: string; abort?: boolean; featurePath?: string; projectRoot?: string },
@@ -527,6 +671,7 @@ export default function (pi: ExtensionAPI) {
             details: {},
           };
         }
+        syncWorkflowWidget(ctx, projectRoot, outcome.featurePath);
 
         const lines: string[] = [];
         lines.push(`Gate answered: ${actualAdvance ? "✅ Approved" : "❌ Not approved"}`);
@@ -576,13 +721,18 @@ export default function (pi: ExtensionAPI) {
       featurePath: Type.Optional(Type.String({ description: "Feature path (defaults to active workflow)" })),
       projectRoot: Type.Optional(Type.String()),
     }),
+    renderResult: renderProjectBuilderToolResult,
     async execute(
       _toolCallId: string,
-      params: { featurePath?: string; projectRoot?: string }
+      params: { featurePath?: string; projectRoot?: string },
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext
     ): Promise<AgentToolResult> {
       const projectRoot = params.projectRoot || getProjectRoot();
 
       const state = status(projectRoot, params.featurePath);
+      syncWorkflowWidget(ctx, projectRoot, params.featurePath);
       if (!state) {
         return {
           content: [
@@ -623,11 +773,16 @@ export default function (pi: ExtensionAPI) {
       ),
       projectRoot: Type.Optional(Type.String()),
     }),
+    renderResult: renderProjectBuilderToolResult,
     async execute(
       _toolCallId: string,
-      params: { mode?: "definitions" | "runs" | "all"; projectRoot?: string }
+      params: { mode?: "definitions" | "runs" | "all"; projectRoot?: string },
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext
     ): Promise<AgentToolResult> {
       const projectRoot = params.projectRoot || getProjectRoot();
+      syncWorkflowWidget(ctx, projectRoot);
       const mode = params.mode || "all";
       const lines: string[] = [];
 
@@ -648,8 +803,10 @@ export default function (pi: ExtensionAPI) {
         } else {
           for (const fp of runs) {
             const state = status(projectRoot, fp);
-            const icon = state?.status === "done" ? "✅" : state?.status === "blocked" ? "❌" : "🔄";
-            lines.push(`- ${icon} ${fp} — ${state?.flow_id ?? "?"} [${state?.status ?? "?"}]`);
+            const running = state?.status !== "done" && state?.status !== "blocked";
+            const icon = state?.status === "done" ? "✅" : state?.status === "blocked" ? "❌" : LOADING_ICON;
+            const statusText = running ? LOADING_LABEL : state?.status ?? "?";
+            lines.push(`- ${icon} ${fp} — ${state?.flow_id ?? "?"} [${statusText}]`);
           }
         }
       }
@@ -674,11 +831,15 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(
       _toolCallId: string,
-      params: { featurePath?: string; projectRoot?: string }
+      params: { featurePath?: string; projectRoot?: string },
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      ctx: ExtensionContext
     ): Promise<AgentToolResult> {
       const projectRoot = params.projectRoot || getProjectRoot();
 
       const result = abort(projectRoot, params.featurePath);
+      syncWorkflowWidget(ctx, projectRoot, params.featurePath);
       if (!result) {
         return {
           content: [{ type: "text", text: "No active workflow to abort." }],
@@ -708,10 +869,19 @@ export default function (pi: ExtensionAPI) {
       const active = status(projectRoot);
 
       if (active) {
+        syncWorkflowWidget(ctx, projectRoot, active.feature_path);
         ctx.ui.notify(
-          renderWorkflowStatus(active).join("\n"),
+          renderStaticWorkflowStatus(active).join("\n"),
           "info"
         );
+        if (currentRunningStep(active)) {
+          if (ctx.isIdle() && !ctx.hasPendingMessages()) {
+            ctx.ui.notify("Resuming interrupted workflow step...", "info");
+            pi.sendUserMessage(buildResumePrompt(projectRoot, active));
+          } else {
+            ctx.ui.notify("Workflow step is marked running; Pi is busy, so resume was not started.", "warning");
+          }
+        }
       } else {
         ctx.ui.notify(
           `No active workflow. Available flows: ${[...flowRegistry.keys()].join(", ")}`,
