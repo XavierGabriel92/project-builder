@@ -1,16 +1,18 @@
 /**
- * Flow Orchestrator Engine
+ * Flow Engine
  *
  * Domain-agnostic engine that advances through flow steps based on
  * supervisor-submitted step-results and user gate answers.
  *
- * API (see §12 of rfc.md):
- *   start(flow, featureName, projectRoot) → WorkflowState
- *   step(featurePath?, projectRoot) → StepInstruction
- *   step_complete(result, featurePath?, projectRoot) → StepTransitionResult
- *   record_gate(answer, featurePath?, projectRoot) → GateTransitionResult
+ * API:
+ *   start(flow, featureName, projectRoot, options) → StartResult
+ *   step(projectRoot, options) → StepInstruction | null
+ *   stepComplete(result, projectRoot, options) → StepCompleteResult | null
+ *   stepUpdate(update, projectRoot, featurePath?) → StepUpdateResult | null
+ *   recordGate(answer, projectRoot, featurePath?) → GateResult | null
  *   status(featurePath?, projectRoot) → WorkflowState | null
  *   list(projectRoot) → string[]
+ *   abort(projectRoot, featurePath?) → WorkflowState | null
  */
 
 import * as fs from "node:fs";
@@ -20,8 +22,8 @@ import {
   type GateAnswer,
   type StepInstruction,
   type StepResult,
+  type WorkflowStepUpdate,
   type WorkflowState,
-  type WorkflowGate,
 } from "../shared/types.ts";
 import {
   resolveFeaturePath,
@@ -35,6 +37,7 @@ import {
   startStep,
   applyStepResult,
   applyGateAnswer,
+  updateStepActivity,
   currentStep,
   currentWorkflowStep,
   type StepTransition,
@@ -48,24 +51,39 @@ import {
 } from "./agent-loader.ts";
 
 // ============================================================================
-// Engine State
+// Prompt Prefix / Suffix (injected by the engine, not written in agent .md files)
 // ============================================================================
 
-/** The agents directory — set by the extension entry point at init */
-let _agentsDir = "";
-
-/** Initialize the engine with the path to the agents/ directory */
-export function initEngine(agentsDir: string): void {
-  _agentsDir = agentsDir;
+function workspacePrefix(featurePath: string): string {
+  return (
+    "## Workspace\n\n" +
+    `Write all output files to .temp/${featurePath}/. ` +
+    "Read inputs from the same directory.\n"
+  );
 }
 
+const COMPLETION_SUFFIX =
+  "\n\n## Completion\n\n" +
+  "When you have finished all the work described above, stop. " +
+  "Do not ask what to do next. Do not offer to continue. " +
+  "The workflow will advance automatically.";
+
+const SUBAGENT_COMPLETION_SUFFIX =
+  "\n\n## Completion\n\n" +
+  "When you have finished, stop. Return your results to the orchestrator. " +
+  "Do not ask questions or offer to continue.";
+
+// ============================================================================
+// validateFlows
+// ============================================================================
+
 /** Validate registered flows and all referenced agent manifests. */
-export function validateFlows(flows: FlowDefinition[]): void {
+export function validateFlows(flows: FlowDefinition[], agentsDir: string): void {
   const errors: string[] = [];
   for (const flow of flows) {
     try {
-      loadFlowAgents(agentsDir(), flow);
-      validateFlowApproval(agentsDir(), flow);
+      loadFlowAgents(agentsDir, flow);
+      validateFlowApproval(agentsDir, flow);
     } catch (err) {
       errors.push(`Flow "${flow.id}": ${(err as Error).message}`);
     }
@@ -76,15 +94,6 @@ export function validateFlows(flows: FlowDefinition[]): void {
   }
 }
 
-function agentsDir(): string {
-  if (!_agentsDir) {
-    throw new Error(
-      "Engine not initialized. Call initEngine(agentsDir) before using engine functions."
-    );
-  }
-  return _agentsDir;
-}
-
 // ============================================================================
 // start
 // ============================================================================
@@ -92,6 +101,11 @@ function agentsDir(): string {
 export interface StartResult {
   state: WorkflowState;
   featurePath: string;
+}
+
+export interface StartOptions {
+  serviceDirs?: string[];
+  agentsDir: string;
 }
 
 /**
@@ -107,10 +121,12 @@ export function start(
   flow: FlowDefinition,
   featureName: string,
   projectRoot: string,
-  serviceDirs?: string[]
+  options: StartOptions
 ): StartResult {
+  const { serviceDirs, agentsDir } = options;
+
   // Validate that requestApproval steps have approval blocks
-  validateFlowApproval(agentsDir(), flow);
+  validateFlowApproval(agentsDir, flow);
 
   const featurePath = resolveFeaturePath(featureName, projectRoot);
   const state = createWorkflowState(flow, featureName, featurePath, projectRoot, serviceDirs);
@@ -124,6 +140,11 @@ export function start(
 // step
 // ============================================================================
 
+export interface StepOptions {
+  featurePath?: string;
+  agentsDir: string;
+}
+
 /**
  * Get the current step's instructions for the supervisor.
  *
@@ -135,8 +156,9 @@ export function start(
  */
 export function step(
   projectRoot: string,
-  featurePath?: string
+  options: StepOptions
 ): StepInstruction | null {
+  const { featurePath, agentsDir } = options;
   const resolved = resolveWorkflow(projectRoot, featurePath);
   if (!resolved) return null;
 
@@ -154,17 +176,21 @@ export function step(
   writeWorkflow(projectRoot, resolved.featurePath, state);
 
   // Load agent manifest
-  const loaded = loadAgent(agentsDir(), flowStep.agent);
+  const loaded = loadAgent(agentsDir, flowStep.agent);
   const subagentInstructions = loaded.manifest.subagents
     ? Object.fromEntries(
         Object.entries(loaded.manifest.subagents).map(([name, relativePath]) => {
-          const subagent = loadAgent(agentsDir(), relativePath, true);
+          const subagent = loadAgent(agentsDir, relativePath, true);
           return [
             name,
             {
               path: relativePath,
               tools: subagent.manifest.tools,
-              prompt: subagent.prompt,
+              prompt:
+                workspacePrefix(resolved.featurePath) +
+                "\n\n" +
+                subagent.prompt +
+                SUBAGENT_COMPLETION_SUFFIX,
             },
           ];
         })
@@ -181,7 +207,11 @@ export function step(
     subagents: loaded.manifest.subagents,
     subagentInstructions,
     parallel: loaded.manifest.parallel,
-    prompt: loaded.prompt,
+    prompt:
+      workspacePrefix(resolved.featurePath) +
+      "\n\n" +
+      loaded.prompt +
+      COMPLETION_SUFFIX,
     requestApproval: flowStep.requestApproval ?? false,
     attempt: currentWsStep?.attempt ?? 1,
     maxAttempts: flowStep.attempts ?? 1,
@@ -196,12 +226,17 @@ export function step(
 // step_complete
 // ============================================================================
 
+export interface StepCompleteOptions {
+  featurePath?: string;
+  agentsDir: string;
+}
+
 export interface StepCompleteResult {
   state: WorkflowState;
   featurePath: string;
   action: StepTransition["action"];
   /** Present if action is "gate" — the approval dialog to show */
-  gate?: WorkflowGate;
+  gate?: import("../shared/types.ts").WorkflowGate;
   /** Present if action is "block" or there's an error */
   error?: string;
   /** Non-blocking output/artifact checks */
@@ -218,8 +253,9 @@ export interface StepCompleteResult {
 export function stepComplete(
   result: StepResult,
   projectRoot: string,
-  featurePath?: string
+  options: StepCompleteOptions
 ): StepCompleteResult | null {
+  const { featurePath, agentsDir } = options;
   const resolved = resolveWorkflow(projectRoot, featurePath);
   if (!resolved) return null;
 
@@ -227,13 +263,13 @@ export function stepComplete(
   const flowStep = currentStep(state);
   const warnings =
     paramsSucceeded(result) && flowStep
-      ? verifyExpectedOutputs(projectRoot, resolved.featurePath, flowStep.agent)
+      ? verifyExpectedOutputs(agentsDir, projectRoot, resolved.featurePath, flowStep.agent)
       : [];
 
   // Build gate loader bound to the agents directory
-  const loadGate = (agent: string, stepIndex: number): WorkflowGate | null => {
+  const loadGate = (agent: string, stepIndex: number): import("../shared/types.ts").WorkflowGate | null => {
     try {
-      const loaded = loadAgent(agentsDir(), agent);
+      const loaded = loadAgent(agentsDir, agent);
       return buildGate(loaded.manifest, stepIndex);
     } catch {
       return null;
@@ -255,16 +291,48 @@ export function stepComplete(
   };
 }
 
+// ============================================================================
+// step_update
+// ============================================================================
+
+export interface StepUpdateResult {
+  state: WorkflowState;
+  featurePath: string;
+  error?: string;
+}
+
+/** Record incremental activity for the current running step. */
+export function stepUpdate(
+  update: WorkflowStepUpdate,
+  projectRoot: string,
+  featurePath?: string
+): StepUpdateResult | null {
+  const resolved = resolveWorkflow(projectRoot, featurePath);
+  if (!resolved) return null;
+
+  const result = updateStepActivity(resolved.state, update);
+  if (!result.error) {
+    writeWorkflow(projectRoot, resolved.featurePath, result.state);
+  }
+
+  return {
+    state: result.state,
+    featurePath: resolved.featurePath,
+    error: result.error,
+  };
+}
+
 function paramsSucceeded(result: StepResult): boolean {
   return result.result === "success";
 }
 
 function verifyExpectedOutputs(
+  agentsDir: string,
   projectRoot: string,
   featurePath: string,
   agent: string
 ): string[] {
-  const loaded = loadAgent(agentsDir(), agent);
+  const loaded = loadAgent(agentsDir, agent);
   const outputs = loaded.manifest.outputs ?? [];
   if (outputs.length === 0) return [];
 

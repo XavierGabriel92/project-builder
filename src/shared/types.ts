@@ -50,7 +50,8 @@ export type AgentTool =
   | "code_search"
   | "fetch_content"
   | "get_search_content"
-  | "mcp";
+  | "mcp"
+  | "flow_step_update";
 
 /** An approval dialog option — owned by the agent .md */
 export interface ApprovalOption {
@@ -99,7 +100,7 @@ export interface AgentManifest {
   outputs?: string[];
 
   /**
-   * If the flow step has requestApproval: true, the orchestrator will
+   * If the flow step has requestApproval: true, the engine will
    * present this dialog after the supervisor submits "success".
    * The agent owns what "approval" means for this step.
    */
@@ -122,6 +123,34 @@ export interface StepResult {
   };
 }
 
+/** User-facing, incremental activity reported while a step is running. */
+export interface WorkflowStepActivity {
+  /** Short semantic phase, e.g. "reading plan", "fan out workers", "running checks". */
+  phase?: string;
+  /** Human-readable status line for the current work. */
+  message?: string;
+  /** Whether the step is still progressing or needs intervention. */
+  status?: "working" | "blocked" | "needs_attention";
+  /** Correlated subagent async run ids, when known. */
+  child_run_ids?: string[];
+  /** Optional current tool summary for direct supervisor work. */
+  current_tool?: string;
+  /** Optional path/file currently being inspected or changed. */
+  current_path?: string;
+  updated_at: string;
+}
+
+/** Incremental update submitted by the supervisor while the current step runs. */
+export interface WorkflowStepUpdate {
+  stepIndex?: number;
+  phase?: string;
+  message?: string;
+  status?: WorkflowStepActivity["status"];
+  childRunIds?: string[];
+  currentTool?: string;
+  currentPath?: string;
+}
+
 // ============================================================================
 // Workflow State (§10)
 // ============================================================================
@@ -137,6 +166,7 @@ export interface WorkflowStep {
   agent: string;
   status: StepStatus;
   result?: StepResult;
+  activity?: WorkflowStepActivity;
   attempt: number;
   started_at?: string;
   completed_at?: string;
@@ -179,7 +209,7 @@ export interface WorkflowState {
 // Step Instruction (§11) — returned to supervisor
 // ============================================================================
 
-/** What the orchestrator returns to the supervisor for a step */
+/** What the engine returns to the supervisor for a step */
 export interface StepInstruction {
   /** The agent to run */
   agent: string;

@@ -37,6 +37,7 @@ const VALID_TOOLS: Set<string> = new Set([
   "fetch_content",
   "get_search_content",
   "mcp",
+  "flow_step_update",
 ]);
 
 /** Tools not allowed on subagents */

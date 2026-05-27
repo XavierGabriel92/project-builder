@@ -50,4 +50,3 @@ You are the **discover** agent. Your job is to turn `feature-input.md` into grou
 
 Do not ask the user questions. If discovery reveals unresolved product ambiguity, record it for the `clarify` step.
 
-When complete, the supervisor will submit `step-result: success`.

@@ -55,4 +55,3 @@ Rules for `service_dirs`:
 
 After this step succeeds, the supervisor must include the parsed `service_dirs` array in `flow_step_complete.metadata.service_dirs`.
 
-When complete, the supervisor will submit `step-result: success`.

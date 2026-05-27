@@ -33,4 +33,3 @@ You are the **research** agent. Your job is to resolve technical unknowns before
 
 Do not write the implementation plan or edit production code.
 
-When complete, the supervisor will submit `step-result: success`.

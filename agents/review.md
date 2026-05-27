@@ -32,4 +32,3 @@ You are the **review** agent. Your job is to review all changes made during impl
 ## Recommendation
 ```
 
-When complete, the supervisor will submit `step-result: success`.

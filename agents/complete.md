@@ -47,4 +47,3 @@ You are the **complete** agent. Your job is to produce the final workflow summar
 
 If `service_dirs` is empty or missing, use the project root as the single service.
 
-When all reference folders are written, the supervisor will submit `step-result: success`.

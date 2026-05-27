@@ -29,4 +29,3 @@ You are the **clarify** agent. Your job is to resolve ambiguity before the speci
 
 Do not write the feature specification. That belongs to `spec-write`.
 
-When complete, the supervisor will submit `step-result: success`.

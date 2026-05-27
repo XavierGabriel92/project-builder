@@ -1,5 +1,5 @@
 /**
- * State machine transitions for the flow orchestrator.
+ * State machine transitions for the flow engine.
  *
  * Pure functions — no I/O. The engine reads state, calls these functions,
  * then writes the resulting state back to workflow.json.
@@ -12,6 +12,7 @@ import {
   type GateAnswer,
   type StepResult,
   type StepStatus,
+  type WorkflowStepUpdate,
   type WorkflowGate,
   type WorkflowState,
   type WorkflowStatus,
@@ -71,9 +72,56 @@ export function startStep(state: WorkflowState): WorkflowState {
 
   step.status = "running";
   step.started_at = new Date().toISOString();
+  step.completed_at = undefined;
+  step.result = undefined;
+  step.activity = {
+    status: "working",
+    phase: "starting",
+    message: `Starting ${step.agent}`,
+    updated_at: new Date().toISOString(),
+  };
   step.attempt += 1;
 
   return next;
+}
+
+/** Merge a supervisor-submitted activity update into the current running step. */
+export function updateStepActivity(
+  state: WorkflowState,
+  update: WorkflowStepUpdate
+): { state: WorkflowState; error?: string } {
+  const next = cloneState(state);
+  if (next.status !== "in_progress") {
+    return { state: next, error: `workflow is ${next.status}; only in-progress workflows can be updated` };
+  }
+
+  const stepIndex = update.stepIndex ?? next.current_step_index;
+  if (stepIndex !== next.current_step_index) {
+    return { state: next, error: "step update does not match the current step" };
+  }
+
+  const step = next.steps[stepIndex];
+  if (!step) return { state: next, error: "current step not found" };
+  if (step.status !== "running") {
+    return { state: next, error: `step "${step.agent}" is ${step.status}; call flow_step before updating activity` };
+  }
+
+  const childRunIds = update.childRunIds
+    ? [...new Set(update.childRunIds.map((id) => id.trim()).filter(Boolean))]
+    : step.activity?.child_run_ids;
+
+  step.activity = {
+    ...step.activity,
+    ...(update.phase !== undefined ? { phase: update.phase } : {}),
+    ...(update.message !== undefined ? { message: update.message } : {}),
+    ...(update.status !== undefined ? { status: update.status } : {}),
+    ...(childRunIds !== undefined ? { child_run_ids: childRunIds } : {}),
+    ...(update.currentTool !== undefined ? { current_tool: update.currentTool } : {}),
+    ...(update.currentPath !== undefined ? { current_path: update.currentPath } : {}),
+    updated_at: new Date().toISOString(),
+  };
+
+  return { state: next };
 }
 
 // ============================================================================
@@ -82,7 +130,7 @@ export function startStep(state: WorkflowState): WorkflowState {
 
 export interface StepTransition {
   state: WorkflowState;
-  /** What action the orchestrator should take next */
+  /** What action the engine should take next */
   action: "advance" | "retry" | "gate" | "block" | "done";
   /** Optional: gate data to present to the user */
   gate?: WorkflowGate;
@@ -140,6 +188,12 @@ export function applyStepResult(
 
   step.result = { ...result };
   step.completed_at = new Date().toISOString();
+  step.activity = {
+    ...step.activity,
+    status: result.result === "success" ? "working" : "blocked",
+    message: result.message,
+    updated_at: step.completed_at,
+  };
 
   if (result.result === "success") {
     step.status = "completed";
@@ -175,6 +229,7 @@ export function applyStepResult(
   if (result.retryable !== false && step.attempt < maxAttempts) {
     // Retry — status goes back to pending for re-run
     step.status = "pending";
+    step.completed_at = undefined;
     return { state: next, action: "retry" };
   }
 
@@ -275,6 +330,9 @@ export function applyGateAnswer(
   const step = next.steps[next.current_step_index];
   if (step) {
     step.status = "pending";
+    step.completed_at = undefined;
+    step.result = undefined;
+    step.activity = undefined;
     if (feedback !== undefined) {
       step.last_feedback = feedback;
     }
@@ -290,7 +348,15 @@ export function applyGateAnswer(
 function cloneState(state: WorkflowState): WorkflowState {
   return {
     ...state,
-    steps: state.steps.map((s) => ({ ...s })),
+    steps: state.steps.map((s) => ({
+      ...s,
+      activity: s.activity
+        ? {
+            ...s.activity,
+            child_run_ids: s.activity.child_run_ids ? [...s.activity.child_run_ids] : undefined,
+          }
+        : undefined,
+    })),
     gate: state.gate ? { ...state.gate, options: [...state.gate.options] } : undefined,
     flow_snapshot: { ...state.flow_snapshot, steps: [...state.flow_snapshot.steps] },
     service_dirs: state.service_dirs ? [...state.service_dirs] : undefined,

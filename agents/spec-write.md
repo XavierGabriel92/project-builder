@@ -41,4 +41,3 @@ You are the **spec-write** agent. Your job is to write a comprehensive feature s
 
 The specification should be detailed enough for `research` and `plan` to proceed without guessing.
 
-When complete, the supervisor will submit `step-result: success`.

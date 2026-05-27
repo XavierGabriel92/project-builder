@@ -61,4 +61,3 @@ You are the **gather-input** agent. Your job is to gather feature requirements f
 
 Do not do deep codebase reconnaissance. That belongs to the `discover` step.
 
-When complete, the supervisor will submit `step-result: success`.

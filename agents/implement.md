@@ -39,4 +39,3 @@ If a worker fails, retry with narrower instructions before returning an error.
 
 Do not ask for user approval in this step.
 
-When complete, the supervisor will submit `step-result: success`.

@@ -1,5 +1,5 @@
 /**
- * Integration tests for the flow orchestrator engine.
+ * Integration tests for the flow engine.
  *
  * Uses temp directories to test actual workflow.json read/write.
  */
@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { FlowDefinition } from "../../src/shared/types.ts";
-import { initEngine, start, step, stepComplete, recordGate, status, list } from "../../src/orchestrator/engine.ts";
+import { start, step, stepUpdate, stepComplete, recordGate, status, list } from "../../src/engine/engine.ts";
 
 // Test flow with retries and approval
 const testFlow: FlowDefinition = {
@@ -96,8 +96,6 @@ before(() => {
       "Implement the assigned task.",
     ].join("\n")
   );
-
-  initEngine(agentsDir);
 });
 
 after(() => {
@@ -106,7 +104,7 @@ after(() => {
 
 describe("engine.start", () => {
   it("creates workflow.json with frozen snapshot", () => {
-    const result = start(testFlow, "test-feature", projectRoot);
+    const result = start(testFlow, "test-feature", projectRoot, { agentsDir });
 
     assert.equal(result.state.flow_id, "test-flow");
     assert.equal(result.state.feature, "test-feature");
@@ -130,13 +128,13 @@ describe("engine.start", () => {
     };
 
     assert.throws(
-      () => start(badFlow, "bad-feat", projectRoot),
+      () => start(badFlow, "bad-feat", projectRoot, { agentsDir }),
       /requires user approval/
     );
   });
 
   it("creates date-stamped feature path", () => {
-    const result = start(testFlow, "My Cool Feature!", projectRoot);
+    const result = start(testFlow, "My Cool Feature!", projectRoot, { agentsDir });
 
     // Format: DD-MM-YYYY-my-cool-feature
     assert.match(result.featurePath, /^\d{2}-\d{2}-\d{4}-my-cool-feature$/);
@@ -145,9 +143,9 @@ describe("engine.start", () => {
 
 describe("engine.step", () => {
   it("returns step instruction for the current step", () => {
-    const { featurePath } = start(testFlow, "step-test", projectRoot);
+    const { featurePath } = start(testFlow, "step-test", projectRoot, { agentsDir });
 
-    const instruction = step(projectRoot, featurePath);
+    const instruction = step(projectRoot, { featurePath, agentsDir });
 
     assert.ok(instruction);
     assert.equal(instruction.agent, "gather-input");
@@ -165,24 +163,48 @@ describe("engine.step", () => {
   });
 
   it("returns null when no workflow exists", () => {
-    const result = step(projectRoot, "nonexistent-path");
+    const result = step(projectRoot, { featurePath: "nonexistent-path", agentsDir });
     assert.equal(result, null);
+  });
+});
+
+describe("engine.stepUpdate", () => {
+  it("persists incremental running-step activity", () => {
+    const { featurePath } = start(testFlow, "activity-test", projectRoot, { agentsDir });
+    step(projectRoot, { featurePath, agentsDir });
+
+    const outcome = stepUpdate(
+      {
+        phase: "reading plan",
+        message: "Checking implementation scope",
+        childRunIds: ["child-1"],
+      },
+      projectRoot,
+      featurePath
+    );
+
+    assert.ok(outcome);
+    assert.equal(outcome.error, undefined);
+    const state = status(projectRoot, featurePath);
+    assert.equal(state?.steps[0].activity?.phase, "reading plan");
+    assert.equal(state?.steps[0].activity?.message, "Checking implementation scope");
+    assert.deepEqual(state?.steps[0].activity?.child_run_ids, ["child-1"]);
   });
 });
 
 describe("engine.stepComplete + recordGate (full walkthrough)", () => {
   it("walks through all 3 steps successfully", () => {
-    const { featurePath } = start(testFlow, "walkthrough", projectRoot);
+    const { featurePath } = start(testFlow, "walkthrough", projectRoot, { agentsDir });
 
     // --- Step 1: gather-input ---
-    let instruction = step(projectRoot, featurePath);
+    let instruction = step(projectRoot, { featurePath, agentsDir });
     assert.equal(instruction?.agent, "gather-input");
 
     // Submit success → should trigger gate
     let outcome = stepComplete(
       { result: "success", message: "Input gathered" },
       projectRoot,
-      featurePath
+      { featurePath, agentsDir }
     );
     assert.ok(outcome);
     assert.equal(outcome.action, "gate");
@@ -199,7 +221,7 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
     assert.equal(gateResult.action, "advance");
 
     // --- Step 2: implement ---
-    instruction = step(projectRoot, featurePath);
+    instruction = step(projectRoot, { featurePath, agentsDir });
     assert.equal(instruction?.agent, "implement");
     assert.equal(instruction?.attempt, 1);
     assert.equal(instruction?.maxAttempts, 2);
@@ -213,20 +235,20 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
     outcome = stepComplete(
       { result: "success", message: "Implemented" },
       projectRoot,
-      featurePath
+      { featurePath, agentsDir }
     );
     assert.ok(outcome);
     assert.equal(outcome.action, "advance");
 
     // --- Step 3: review ---
-    instruction = step(projectRoot, featurePath);
+    instruction = step(projectRoot, { featurePath, agentsDir });
     assert.equal(instruction?.agent, "review");
 
     // Submit success (review has no requestApproval in this flow)
     outcome = stepComplete(
       { result: "success", message: "Reviewed" },
       projectRoot,
-      featurePath
+      { featurePath, agentsDir }
     );
     assert.ok(outcome);
     assert.equal(outcome.action, "done");
@@ -235,14 +257,14 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
   });
 
   it("retries implement step on first failure, blocks on second", () => {
-    const { featurePath } = start(testFlow, "retry-test", projectRoot);
+    const { featurePath } = start(testFlow, "retry-test", projectRoot, { agentsDir });
 
     // Advance past gather-input
-    step(projectRoot, featurePath);
+    step(projectRoot, { featurePath, agentsDir });
     stepComplete(
       { result: "success", message: "Done" },
       projectRoot,
-      featurePath
+      { featurePath, agentsDir }
     );
     recordGate(
       { stepIndex: 0, chosenLabel: "Approve", advance: true },
@@ -251,11 +273,11 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
     );
 
     // --- implement step, attempt 1 ---
-    step(projectRoot, featurePath);
+    step(projectRoot, { featurePath, agentsDir });
     let outcome = stepComplete(
       { result: "error", message: "Build failed", retryable: true },
       projectRoot,
-      featurePath
+      { featurePath, agentsDir }
     );
     assert.ok(outcome);
     assert.equal(outcome.action, "retry");
@@ -264,11 +286,11 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
     assert.equal(state?.steps[1].status, "pending"); // reset for retry
 
     // --- implement step, attempt 2 (last) ---
-    step(projectRoot, featurePath);
+    step(projectRoot, { featurePath, agentsDir });
     outcome = stepComplete(
       { result: "error", message: "Still failing", retryable: false },
       projectRoot,
-      featurePath
+      { featurePath, agentsDir }
     );
     assert.ok(outcome);
     assert.equal(outcome.action, "block");
@@ -281,13 +303,13 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
   });
 
   it("re-runs step when gate answer is not advance", () => {
-    const { featurePath } = start(testFlow, "gate-retry", projectRoot);
+    const { featurePath } = start(testFlow, "gate-retry", projectRoot, { agentsDir });
 
-    step(projectRoot, featurePath);
+    step(projectRoot, { featurePath, agentsDir });
     let outcome = stepComplete(
       { result: "success", message: "Draft" },
       projectRoot,
-      featurePath
+      { featurePath, agentsDir }
     );
     assert.equal(outcome?.action, "gate");
 
@@ -306,22 +328,22 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
   });
 
   it("warns when a successful step is missing declared outputs", () => {
-    const { featurePath } = start(testFlow, "missing-output", projectRoot);
+    const { featurePath } = start(testFlow, "missing-output", projectRoot, { agentsDir });
 
-    step(projectRoot, featurePath);
+    step(projectRoot, { featurePath, agentsDir });
     const outcome = stepComplete(
       { result: "success", message: "Done without artifact" },
       projectRoot,
-      featurePath
+      { featurePath, agentsDir }
     );
 
     assert.ok(outcome?.warnings?.some((warning) => warning.includes("feature-input.md")));
   });
 
   it("stores service_dirs metadata on successful step completion", () => {
-    const { featurePath } = start(testFlow, "metadata", projectRoot);
+    const { featurePath } = start(testFlow, "metadata", projectRoot, { agentsDir });
 
-    step(projectRoot, featurePath);
+    step(projectRoot, { featurePath, agentsDir });
     const outcome = stepComplete(
       {
         result: "success",
@@ -329,7 +351,7 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
         metadata: { service_dirs: ["services/api", "packages/web"] },
       },
       projectRoot,
-      featurePath
+      { featurePath, agentsDir }
     );
 
     assert.deepEqual(outcome?.state.service_dirs, ["services/api", "packages/web"]);
@@ -338,8 +360,8 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
 
 describe("engine.list + status", () => {
   it("lists all workflows", () => {
-    start(testFlow, "list-test-1", projectRoot);
-    start(testFlow, "list-test-2", projectRoot);
+    start(testFlow, "list-test-1", projectRoot, { agentsDir });
+    start(testFlow, "list-test-2", projectRoot, { agentsDir });
 
     const workflows = list(projectRoot);
     assert.ok(workflows.length >= 2);

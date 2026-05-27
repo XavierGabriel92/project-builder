@@ -28,4 +28,3 @@ You are the **doc-sync** agent. Your job is to synchronize documentation with th
 ## Follow-Up Documentation
 ```
 
-When complete, the supervisor will submit `step-result: success`.

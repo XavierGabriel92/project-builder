@@ -8,10 +8,11 @@ import type { FlowDefinition, WorkflowGate } from "../../src/shared/types.ts";
 import {
   createWorkflowState,
   startStep,
+  updateStepActivity,
   applyStepResult,
   applyGateAnswer,
   currentStep,
-} from "../../src/orchestrator/transitions.ts";
+} from "../../src/engine/transitions.ts";
 
 // Helper: create a simple flow for testing
 function testFlow(): FlowDefinition {
@@ -96,6 +97,50 @@ describe("startStep", () => {
     state.steps[0].status = "pending"; // reset
     state = startStep(state);
     assert.equal(state.steps[0].attempt, 2);
+  });
+
+  it("clears stale result data when a step is restarted", () => {
+    let state = createWorkflowState(testFlow(), "feat", "path", "/project");
+    state.current_step_index = 2;
+    state = startStep(state);
+    state = applyStepResult(state, { result: "error", message: "Boom", retryable: true }, () => null).state;
+    assert.equal(state.steps[2].status, "pending");
+    assert.equal(state.steps[2].result?.message, "Boom");
+
+    state = startStep(state);
+
+    assert.equal(state.steps[2].status, "running");
+    assert.equal(state.steps[2].result, undefined);
+    assert.equal(state.steps[2].completed_at, undefined);
+    assert.equal(state.steps[2].activity?.phase, "starting");
+  });
+});
+
+describe("updateStepActivity", () => {
+  it("records incremental activity on the running step", () => {
+    let state = createWorkflowState(testFlow(), "feat", "path", "/project");
+    state = startStep(state);
+
+    const result = updateStepActivity(state, {
+      phase: "fan out workers",
+      message: "Starting 3 worker agents",
+      childRunIds: ["run-a", "run-a", "run-b"],
+      currentTool: "subagent",
+    });
+
+    assert.equal(result.error, undefined);
+    assert.equal(result.state.steps[0].activity?.phase, "fan out workers");
+    assert.equal(result.state.steps[0].activity?.message, "Starting 3 worker agents");
+    assert.deepEqual(result.state.steps[0].activity?.child_run_ids, ["run-a", "run-b"]);
+    assert.equal(result.state.steps[0].activity?.current_tool, "subagent");
+  });
+
+  it("rejects updates for non-running steps", () => {
+    const state = createWorkflowState(testFlow(), "feat", "path", "/project");
+
+    const result = updateStepActivity(state, { message: "Too early" });
+
+    assert.match(result.error ?? "", /call flow_step/);
   });
 });
 
