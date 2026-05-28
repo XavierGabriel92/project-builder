@@ -158,3 +158,54 @@ export function resolveWorkflow(
   }
   return findActiveWorkflow(projectRoot);
 }
+
+/**
+ * Remove workflow runs older than the given number of days.
+ * Only removes completed, blocked, or abandoned workflows.
+ * Active workflows (in_progress, awaiting_user) are preserved.
+ *
+ * @returns Array of removed feature paths
+ */
+export function cleanupWorkflows(
+  projectRoot: string,
+  olderThanDays: number
+): string[] {
+  const now = Date.now();
+  const cutoff = now - olderThanDays * 24 * 60 * 60 * 1000;
+  const removed: string[] = [];
+
+  const tempDir = path.join(projectRoot, TEMP_DIR);
+  try {
+    if (!fs.existsSync(tempDir)) return removed;
+
+    const entries = fs.readdirSync(tempDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const wfPath = path.join(tempDir, entry.name, WORKFLOW_FILE);
+      try {
+        if (!fs.existsSync(wfPath)) continue;
+
+        const state = JSON.parse(fs.readFileSync(wfPath, "utf-8")) as WorkflowState;
+
+        // Preserve active workflows
+        if (state.status === "in_progress" || state.status === "awaiting_user") continue;
+
+        const dirPath = path.join(tempDir, entry.name);
+        const dirMtime = fs.statSync(dirPath).mtimeMs;
+
+        if (dirMtime < cutoff) {
+          fs.rmSync(dirPath, { recursive: true, force: true });
+          removed.push(entry.name);
+        }
+      } catch {
+        // Skip invalid or unreadable workflows
+        continue;
+      }
+    }
+  } catch {
+    // tempDir doesn't exist or can't be read
+  }
+
+  return removed;
+}

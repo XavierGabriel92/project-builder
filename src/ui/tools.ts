@@ -41,11 +41,14 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         id: Type.String(),
         version: Type.Number(),
         description: Type.String(),
+        strictOutputs: Type.Optional(Type.Boolean({ description: "If true, stepComplete blocks when declared output files are missing (default: false)" })),
         steps: Type.Array(
           Type.Object({
+            id: Type.Optional(Type.String({ description: "Optional step identifier (defaults to agent name)" })),
             agent: Type.String(),
             requestApproval: Type.Optional(Type.Boolean()),
             attempts: Type.Optional(Type.Number()),
+            model: Type.Optional(Type.String({ description: "Optional model override for this step (e.g. 'google/gemini-2.5-pro')" })),
           })
         ),
       }),
@@ -79,7 +82,16 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         const result = engine.start(params.flowDefinition, params.featureName, projectRoot, {
           serviceDirs: params.serviceDirs,
         });
-        return textResult(renderWorkflowStatus(result.state).join("\n"), { featurePath: result.featurePath });
+
+        // Return a concise summary
+        const state = result.state;
+        const stepInfo = state.steps.map(
+          (s, i) => `${i === state.current_step_index ? ">" : " "} Step ${i + 1}: ${s.agent} [${s.status}]`
+        ).join("\n");
+        return textResult(
+          `✅ Workflow "${state.feature}" started.\n\n${stepInfo}`,
+          { featurePath: result.featurePath }
+        );
       } catch (err) {
         return errorResult(`Error starting flow: ${(err as Error).message}`);
       }
@@ -114,6 +126,8 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
           featurePath: params.featurePath,
         });
 
+        // Sync the dashboard widget so it immediately shows the new running step
+
         if (!instruction) {
           return textResult("No active workflow found. Start one with flow_start first.");
         }
@@ -138,6 +152,14 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         }
         if (instruction.lastFeedback) {
           lines.push(`Previous feedback: ${instruction.lastFeedback}`);
+        }
+        if (instruction.lastError) {
+          lines.push(`Previous error: ${instruction.lastError}`);
+        }
+        if (instruction.approvalManifest) {
+          lines.push(
+            `Approval gate: "${instruction.approvalManifest.header}" with ${instruction.approvalManifest.options.length} option(s)`
+          );
         }
         lines.push("", "---", "", "## Agent Prompt", "", instruction.prompt);
 
@@ -210,6 +232,8 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
       if (!outcome) {
         return textResult("No active workflow found.");
       }
+
+
       if (outcome.error) {
         return errorResult(`Step update blocked: ${outcome.error}`, { featurePath: outcome.featurePath });
       }
@@ -285,6 +309,8 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         if (!outcome) {
           return textResult("No active workflow found.");
         }
+
+        // Sync widget after step completion
 
         const lines: string[] = [];
         lines.push(`Step result: **${params.result}**`);
@@ -404,6 +430,8 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         if (!outcome) {
           return textResult("Failed to record gate answer.");
         }
+
+        // Sync widget after gate answer
 
         const lines: string[] = [];
         lines.push(`Gate answered: ${actualAdvance ? "✅ Approved" : "❌ Not approved"}`);
@@ -618,6 +646,14 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
       }
       if (instruction.lastFeedback) {
         lines.push(`Previous feedback: ${instruction.lastFeedback}`);
+      }
+      if (instruction.lastError) {
+        lines.push(`Previous error: ${instruction.lastError}`);
+      }
+      if (instruction.approvalManifest) {
+        lines.push(
+          `Approval gate: "${instruction.approvalManifest.header}" with ${instruction.approvalManifest.options.length} option(s)`
+        );
       }
       lines.push("", "---", "", "## Agent Prompt", "", instruction.prompt);
 

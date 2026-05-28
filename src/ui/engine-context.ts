@@ -20,6 +20,7 @@ import {
   status,
   abort,
   list,
+  cleanupWorkflows,
   type StartOptions,
   type StepOptions,
   type StepCompleteOptions,
@@ -55,6 +56,7 @@ export interface EngineContext {
   status: typeof status;
   abort: typeof abort;
   list: typeof list;
+  cleanupWorkflows: (projectRoot: string, olderThanDays: number) => string[];
 }
 
 export function createEngineContext(agentsDir: string): EngineContext {
@@ -72,5 +74,6 @@ export function createEngineContext(agentsDir: string): EngineContext {
     status,
     abort,
     list,
+    cleanupWorkflows,
   };
 }

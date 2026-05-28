@@ -234,7 +234,7 @@ function renderCompactWorkflowStatus(state: WorkflowState, options: RenderWorkfl
 
   const elapsed = stepElapsed(step, now);
   const headline = `${state.flow_id} v${state.flow_version} · ${state.feature} · step ${step.index + 1}/${state.steps.length} ${step.agent} · ${step.status}${elapsed ? ` ${elapsed}` : ""}`;
-  const lines = [headline];
+  const lines = ["── Workflow ──", headline];
   const activity = step.activity?.message ?? step.activity?.phase ?? truncate(compactStatus(step));
   lines.push(`  ${step.agent} · ${activity}`);
 

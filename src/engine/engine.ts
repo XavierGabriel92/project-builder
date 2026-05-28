@@ -31,6 +31,7 @@ import {
   listWorkflows,
   resolveWorkflow,
   getWorkflowDir,
+  cleanupWorkflows as cleanupPersisted,
 } from "../shared/persistence.ts";
 import {
   createWorkflowState,
@@ -43,12 +44,40 @@ import {
   type StepTransition,
   type GateTransition,
 } from "./transitions.ts";
+import type { LoadedAgent } from "./agent-loader.ts";
 import {
   loadAgent,
   loadFlowAgents,
   validateFlowApproval,
   buildGate,
 } from "./agent-loader.ts";
+
+// ============================================================================
+// Agent cache (avoids re-reading .md files on every step/complete call)
+// ============================================================================
+
+const agentCache = new Map<string, { loaded: LoadedAgent; mtime: number }>();
+
+function getCachedAgent(agentsDir: string, agentId: string, isSubagent = false): LoadedAgent {
+  const filePath = path.join(agentsDir, agentId.endsWith(".md") ? agentId : `${agentId}.md`);
+  const cached = agentCache.get(filePath);
+  try {
+    const currentMtime = fs.statSync(filePath).mtimeMs;
+    if (cached && cached.mtime === currentMtime) {
+      return cached.loaded;
+    }
+  } catch {
+    // File might not exist yet; fall through to loadAgent which will throw
+  }
+
+  const loaded = loadAgent(agentsDir, agentId, isSubagent);
+  try {
+    agentCache.set(filePath, { loaded, mtime: fs.statSync(filePath).mtimeMs });
+  } catch {
+    // Don't cache if stat fails
+  }
+  return loaded;
+}
 
 // ============================================================================
 // Prompt Prefix / Suffix (injected by the engine, not written in agent .md files)
@@ -63,7 +92,11 @@ function workspacePrefix(featurePath: string): string {
 }
 
 const COMPLETION_SUFFIX =
-  "\n\n## Completion\n\n" +
+  "\n\n## Important\n\n" +
+  "Follow the instructions above carefully. Do not skip steps or complete this step " +
+  "without doing the work described. The workflow expects the declared output files " +
+  "to exist. If you do not write them, the workflow will block.\n\n" +
+  "## Completion\n\n" +
   "When you have finished all the work described above, stop. " +
   "Do not ask what to do next. Do not offer to continue. " +
   "The workflow will advance automatically.";
@@ -188,12 +221,12 @@ export function step(
   state = startStep(state);
   writeWorkflow(projectRoot, resolved.featurePath, state);
 
-  // Load agent manifest
-  const loaded = loadAgent(agentsDir, flowStep.agent);
+  // Load agent manifest (cached)
+  const loaded = getCachedAgent(agentsDir, flowStep.agent);
   const subagentInstructions = loaded.manifest.subagents
     ? Object.fromEntries(
         Object.entries(loaded.manifest.subagents).map(([name, relativePath]) => {
-          const subagent = loadAgent(agentsDir, relativePath, true);
+          const subagent = getCachedAgent(agentsDir, relativePath, true);
           return [
             name,
             {
@@ -227,10 +260,16 @@ export function step(
       (flowStep.requestApproval ? APPROVAL_INSTRUCTION : "") +
       COMPLETION_SUFFIX,
     requestApproval: flowStep.requestApproval ?? false,
+    approvalManifest: flowStep.requestApproval ? loaded.manifest.approval : undefined,
     attempt: currentWsStep?.attempt ?? 1,
     maxAttempts: flowStep.attempts ?? 1,
     expectedOutputs: loaded.manifest.outputs,
     lastFeedback: currentWsStep?.last_feedback,
+    lastError:
+      currentWsStep?.result?.result === "error" && currentWsStep.status === "pending"
+        ? currentWsStep.result.message
+        : undefined,
+    model: flowStep.model,
   };
 
   return instruction;
@@ -275,15 +314,32 @@ export function stepComplete(
 
   const { state } = resolved;
   const flowStep = currentStep(state);
+
+  // --- Strict output check (blocks success if declared outputs are missing) ---
+  const strictOutputs = state.flow_snapshot.strictOutputs ?? false;
+  if (paramsSucceeded(result) && flowStep && strictOutputs) {
+    const missing = verifyExpectedOutputs(agentsDir, projectRoot, resolved.featurePath, flowStep.agent);
+    if (missing.length > 0) {
+      return {
+        state,
+        featurePath: resolved.featurePath,
+        action: "block" as const,
+        error: `Strict output check failed:\n${missing.join("\n")}\nComplete the work and write the missing files before calling stepComplete again.`,
+        warnings: missing,
+      };
+    }
+  }
+
+  // Non-strict mode: produce warnings only
   const warnings =
-    paramsSucceeded(result) && flowStep
+    paramsSucceeded(result) && flowStep && !strictOutputs
       ? verifyExpectedOutputs(agentsDir, projectRoot, resolved.featurePath, flowStep.agent)
       : [];
 
-  // Build gate loader bound to the agents directory
+  // Build gate loader bound to the agents directory (cached)
   const loadGate = (agent: string, stepIndex: number): import("../shared/types.ts").WorkflowGate | null => {
     try {
-      const loaded = loadAgent(agentsDir, agent);
+      const loaded = getCachedAgent(agentsDir, agent);
       return buildGate(loaded.manifest, stepIndex);
     } catch {
       return null;
@@ -346,7 +402,7 @@ function verifyExpectedOutputs(
   featurePath: string,
   agent: string
 ): string[] {
-  const loaded = loadAgent(agentsDir, agent);
+  const loaded = getCachedAgent(agentsDir, agent);
   const outputs = loaded.manifest.outputs ?? [];
   if (outputs.length === 0) return [];
 
@@ -440,4 +496,19 @@ export function abort(
   const state = { ...resolved.state, status: "abandoned" as const };
   writeWorkflow(projectRoot, resolved.featurePath, state);
   return state;
+}
+
+// ============================================================================
+// cleanup
+// ============================================================================
+
+/**
+ * Remove workflow runs older than the given number of days.
+ * Only removes completed, blocked, or abandoned workflows.
+ * Active workflows (in_progress, awaiting_user) are preserved.
+ *
+ * @returns Array of removed feature paths
+ */
+export function cleanupWorkflows(projectRoot: string, olderThanDays: number): string[] {
+  return cleanupPersisted(projectRoot, olderThanDays);
 }

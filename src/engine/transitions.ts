@@ -364,10 +364,14 @@ function cloneState(state: WorkflowState): WorkflowState {
 }
 
 function mergeStepMetadata(state: WorkflowState, result: StepResult): void {
-  const serviceDirs = result.metadata?.service_dirs;
-  if (!serviceDirs) return;
+  const newServiceDirs = result.metadata?.service_dirs;
+  if (!newServiceDirs) return;
 
-  state.service_dirs = [...new Set(serviceDirs.filter(Boolean))];
+  // Accumulate with existing service_dirs (deduplicated)
+  state.service_dirs = [...new Set([
+    ...(state.service_dirs ?? []),
+    ...newServiceDirs.filter(Boolean),
+  ])];
 }
 
 function advanceStep(state: WorkflowState): StepTransition {

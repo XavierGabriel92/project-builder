@@ -24,6 +24,13 @@ export interface FlowStep {
 
   /** Auto-retry on error until exhausted (default 1) */
   attempts?: number;
+
+  /**
+   * Optional model override for this step (e.g. "google/gemini-2.5-pro").
+   * When set, the StepInstruction includes it so the routing layer can use it.
+   * When unset, the default system model is used.
+   */
+  model?: string;
 }
 
 /** A flow is an ordered list of agent names + approval flags — nothing domain-specific. */
@@ -32,6 +39,12 @@ export interface FlowDefinition {
   version: number;
   description: string;
   steps: FlowStep[];
+
+  /**
+   * If true, stepComplete with result:"success" will BLOCK if declared output files are missing.
+   * Default: false (backward compatible — outputs missing produce warnings only).
+   */
+  strictOutputs?: boolean;
 }
 
 // ============================================================================
@@ -234,6 +247,8 @@ export interface StepInstruction {
   prompt: string;
   /** Whether this step requires user approval after completion */
   requestApproval: boolean;
+  /** If requestApproval is true, the full approval dialog manifest for advance visibility */
+  approvalManifest?: ApprovalManifest;
   /** Attempt number (1-indexed) */
   attempt: number;
   /** Max attempts for this step */
@@ -242,6 +257,13 @@ export interface StepInstruction {
   expectedOutputs?: string[];
   /** Feedback from a previous gate answer on this step (when retrying) */
   lastFeedback?: string;
+  /** Error message from the most recent failed attempt (when retrying after an error, not a gate rejection) */
+  lastError?: string;
+  /**
+   * Optional model override for this step.
+   * When set, the LLM should use this model instead of the default.
+   */
+  model?: string;
 }
 
 // ============================================================================
