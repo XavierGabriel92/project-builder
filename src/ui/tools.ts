@@ -3,14 +3,29 @@
  *
  * All flow_* tools moved from project-builder/src/extension/index.ts.
  * Now receives agentsDir from the engine context.
+ *
+ * Each tool has renderCall/renderResult for TUI display, following the
+ * minimal-mode pattern:
+ *   - renderCall: concise one-line command summary
+ *   - renderResult (collapsed): minimal output (spinner or short status)
+ *   - renderResult (expanded): full workflow status details
  */
 
 import { Type } from "typebox";
+import { Text } from "@earendil-works/pi-tui";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  Component,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
 
 import type { FlowDefinition } from "../shared/types.ts";
-import { renderWorkflowStatus } from "../engine/workflow-renderer.ts";
+import type { WorkflowState } from "../shared/types.ts";
+import {
+  renderWorkflowStatus,
+} from "../engine/workflow-renderer.ts";
 import { listCorrelatedSubagentRuns } from "../engine/subagent-activity.ts";
 import type { EngineContext } from "./engine-context.ts";
 
@@ -26,7 +41,38 @@ function errorResult(text: string, details?: Record<string, unknown>): AgentTool
   return { content: [{ type: "text", text }], details: { isError: true, ...details } };
 }
 
-export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
+/** Whether the workflow is actively running (a step is being executed). */
+function isRunningWorkflow(state: WorkflowState): boolean {
+  return state.status === "in_progress";
+}
+
+// ============================================================================
+// Shared render helpers
+// ============================================================================
+
+/** Render a flow tool call line: tool name + key args */
+function renderFlowCall(
+  name: string,
+  theme: Theme,
+  extraInfo?: string
+): Component {
+  let text = `${theme.fg("toolTitle", theme.bold(name))}`;
+  if (extraInfo) {
+    text += ` ${theme.fg("accent", extraInfo)}`;
+  }
+  return new Text(text, 0, 0);
+}
+
+function truncate(value: string, max = 60): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, Math.max(0, max - 1))}…`;
+}
+
+export function registerTools(
+  pi: ExtensionAPI,
+  engine: EngineContext,
+  onStateChange?: () => void
+): void {
   // ---------------------------------------------------------------------------
   // Tool: flow_start
   // ---------------------------------------------------------------------------
@@ -57,6 +103,25 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
       serviceDirs: Type.Optional(Type.Array(Type.String({ description: "Service directories touched by the flow" }))),
       projectRoot: Type.Optional(Type.String({ description: "Project root directory (defaults to cwd)" })),
     }),
+    renderCall(args, theme) {
+      return renderFlowCall(
+        "flow_start",
+        theme,
+        args.featureName
+      );
+    },
+
+    renderResult(result, options, theme) {
+      if (options.expanded) {
+        const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+        return new Text(`\n${textContent}`, 0, 0);
+      }
+      // Collapsed: show status
+      const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+      const firstLine = textContent.split("\n")[0] ?? "";
+      return new Text(theme.fg("muted", truncate(firstLine, 60)), 0, 0);
+    },
+
     async execute(
       _toolCallId: string,
       params: {
@@ -88,6 +153,9 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         const stepInfo = state.steps.map(
           (s, i) => `${i === state.current_step_index ? ">" : " "} Step ${i + 1}: ${s.agent} [${s.status}]`
         ).join("\n");
+        // Notify the widget (if registered) to refresh
+        onStateChange?.();
+
         return textResult(
           `✅ Workflow "${state.feature}" started.\n\n${stepInfo}`,
           { featurePath: result.featurePath }
@@ -105,13 +173,33 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
     name: "flow_step",
     label: "Flow Step",
     description:
-      "Get the current step's instructions. Returns the agent to run, available tools, subagent config, parallel settings, and the agent's prompt. Marks the step as 'running'.",
-    promptSnippet: "Get instructions for the current step in an active workflow",
+      "Get the current step's instructions. Marks the step as 'running'. Returns step details (agent, prompt, tools, subagents) in both text and metadata.",
+    promptSnippet: "Get instructions for the current step in an active workflow — read full step data from details metadata",
     parameters: Type.Object({
       featurePath: Type.Optional(Type.String({ description: "Feature path (looks up active workflow if omitted)" })),
       agentsDir: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String({ description: "Project root (defaults to cwd)" })),
     }),
+    renderCall(args, theme) {
+      return renderFlowCall(
+        "flow_step",
+        theme,
+        args.featurePath
+      );
+    },
+
+    renderResult(result, options, theme) {
+      // Show spinner when in_progress, full status otherwise
+      const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+
+      if (options.expanded) {
+        // Expanded: show full details from result
+        return new Text(`\n${textContent}`, 0, 0);
+      }
+
+      return new Text(theme.fg("muted", truncate(textContent, 60)), 0, 0);
+    },
+
     async execute(
       _toolCallId: string,
       params: { featurePath?: string; agentsDir?: string; projectRoot?: string },
@@ -126,51 +214,33 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
           featurePath: params.featurePath,
         });
 
-        // Sync the dashboard widget so it immediately shows the new running step
-
         if (!instruction) {
           return textResult("No active workflow found. Start one with flow_start first.");
         }
 
-        const lines: string[] = [
-          `**Step ${instruction.stepIndex + 1}: ${instruction.agent}**`,
-          `Attempt: ${instruction.attempt}/${instruction.maxAttempts}`,
-          `Approval required: ${instruction.requestApproval ? "yes" : "no"}`,
-          `Tools: ${instruction.tools.join(", ")}`,
-        ];
+        // Notify the widget that a new step has started
+        onStateChange?.();
 
-        if (instruction.subagents) {
-          lines.push(`Subagents: ${Object.keys(instruction.subagents).join(", ")}`);
-        }
-        if (instruction.parallel) {
-          lines.push(
-            `Parallel: ${instruction.parallel.subagent} over ${instruction.parallel.over} (concurrency: ${instruction.parallel.concurrency ?? "default"})`
-          );
-        }
-        if (instruction.expectedOutputs?.length) {
-          lines.push(`Expected outputs: ${instruction.expectedOutputs.join(", ")}`);
-        }
-        if (instruction.lastFeedback) {
-          lines.push(`Previous feedback: ${instruction.lastFeedback}`);
-        }
-        if (instruction.lastError) {
-          lines.push(`Previous error: ${instruction.lastError}`);
-        }
-        if (instruction.approvalManifest) {
-          lines.push(
-            `Approval gate: "${instruction.approvalManifest.header}" with ${instruction.approvalManifest.options.length} option(s)`
-          );
-        }
-        lines.push("", "---", "", "## Agent Prompt", "", instruction.prompt);
-
-        if (instruction.subagentInstructions) {
-          lines.push("", "## Subagent Prompts");
-          for (const [name, subagent] of Object.entries(instruction.subagentInstructions)) {
-            lines.push("", `### ${name} (${subagent.path})`, `Tools: ${subagent.tools.join(", ")}`, "", subagent.prompt);
+        return textResult(
+          `Step ${instruction.stepIndex + 1} (${instruction.agent}) loaded. ` +
+          `Attempt ${instruction.attempt}/${instruction.maxAttempts}.`,
+          {
+            agent: instruction.agent,
+            stepIndex: instruction.stepIndex,
+            attempt: instruction.attempt,
+            maxAttempts: instruction.maxAttempts,
+            tools: instruction.tools,
+            subagents: instruction.subagents ?? {},
+            parallel: instruction.parallel,
+            expectedOutputs: instruction.expectedOutputs,
+            lastFeedback: instruction.lastFeedback,
+            lastError: instruction.lastError,
+            requestApproval: instruction.requestApproval,
+            approvalManifest: instruction.approvalManifest,
+            prompt: instruction.prompt,
+            subagentInstructions: instruction.subagentInstructions,
           }
-        }
-
-        return textResult(lines.join("\n"), { agent: instruction.agent, stepIndex: instruction.stepIndex });
+        );
       } catch (err) {
         return errorResult(`Error loading step: ${(err as Error).message}`);
       }
@@ -197,6 +267,25 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
       featurePath: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String()),
     }),
+    renderCall(args, theme) {
+      const info = args.phase ?? args.message ?? "";
+      return renderFlowCall(
+        "flow_update",
+        theme,
+        truncate(info, 40)
+      );
+    },
+
+    renderResult(result, options, theme) {
+      if (options.expanded) {
+        const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+        return new Text(`\n${textContent}`, 0, 0);
+      }
+      const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+      
+      return new Text(theme.fg("muted", truncate(textContent, 60)), 0, 0);
+    },
+
     async execute(
       _toolCallId: string,
       params: {
@@ -233,13 +322,29 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         return textResult("No active workflow found.");
       }
 
-
       if (outcome.error) {
         return errorResult(`Step update blocked: ${outcome.error}`, { featurePath: outcome.featurePath });
       }
 
       // Enrich with subagent activity if available
       const childRuns = listCorrelatedSubagentRuns(outcome.state, 6);
+
+      // Notify the widget to refresh with updated step activity
+      onStateChange?.();
+
+      if (isRunningWorkflow(outcome.state)) {
+        const status = outcome.state.steps[outcome.state.current_step_index];
+        return textResult(
+          `Step ${outcome.state.current_step_index + 1} (${status?.agent ?? "?"}) updated`,
+          {
+            featurePath: outcome.featurePath,
+            stepIndex: outcome.state.current_step_index,
+            childRuns: childRuns.map((r) => ({ id: r.id, agents: r.agents, state: r.state })),
+          }
+        );
+      }
+
+      // Fallback for non-running states (shouldn't normally happen for updates)
       const statusLines = renderWorkflowStatus(outcome.state, {
         childRuns,
         loadingIcon: ">",
@@ -260,8 +365,8 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
     name: "flow_step_complete",
     label: "Complete Step",
     description:
-      "Submit the result of the current step (supervisor only). Accepts 'success' or 'error'. If success and the step requires approval, the flow pauses for a user gate. On error with retries remaining, the same step re-runs.",
-    promptSnippet: "Submit step-result for an active workflow step (supervisor only)",
+      "Submit the result of the current step (supervisor only). Accepts 'success' or 'error'. If success and the step requires approval, the flow pauses for a user gate (full gate details shown). On error with retries remaining, the same step re-runs.",
+    promptSnippet: "Submit step-result for an active workflow step — gate details shown when approval required",
     parameters: Type.Object({
       result: Type.Union([Type.Literal("success"), Type.Literal("error")]),
       message: Type.String({ description: "Human-readable summary of the outcome" }),
@@ -275,6 +380,24 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
       agentsDir: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String()),
     }),
+    renderCall(args, theme) {
+      return renderFlowCall(
+        "flow_complete",
+        theme,
+        args.result ? `${args.result}: ${truncate(args.message, 30)}` : undefined
+      );
+    },
+
+    renderResult(result, options, theme) {
+      if (options.expanded) {
+        const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+        return new Text(`\n${textContent}`, 0, 0);
+      }
+      const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+      
+      return new Text(theme.fg("muted", truncate(textContent, 60)), 0, 0);
+    },
+
     async execute(
       _toolCallId: string,
       params: {
@@ -310,49 +433,62 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
           return textResult("No active workflow found.");
         }
 
-        // Sync widget after step completion
+        // Notify the widget to refresh after step completion
+        onStateChange?.();
 
-        const lines: string[] = [];
-        lines.push(`Step result: **${params.result}**`);
-        if (outcome.warnings?.length) {
-          lines.push("", "Warnings:");
-          for (const warning of outcome.warnings) {
-            lines.push(`- ${warning}`);
-          }
+        // Handle gate — always show full content so the user can answer
+        if (outcome.action === "gate") {
+          const lines: string[] = [
+            `Step result: **${params.result}**`,
+            "",
+            `⛔ **Approval required: ${outcome.gate!.header}**`,
+            "",
+            "**IMPORTANT: Use `ask_user_question` to present the gate to the user. " +
+            "Call `flow_continue` with the feature path to see the full gate options. " +
+            "Do NOT auto-answer the gate by calling `flow_record_gate` directly " +
+            "without asking the user first.**",
+          ];
+          return textResult(lines.join("\n"), {
+            action: outcome.action,
+            featurePath: outcome.featurePath,
+            gate: { header: outcome.gate!.header, stepIndex: outcome.gate!.stepIndex },
+          });
         }
 
-        switch (outcome.action) {
-          case "advance":
-            lines.push("→ Advancing to next step.");
-            break;
-          case "retry":
-            lines.push("↻ Retrying the same step.");
-            break;
-          case "gate": {
-            lines.push(`⛔ **Approval required: ${outcome.gate!.header}**`);
-            lines.push("");
-            lines.push(
-              "**IMPORTANT: Use `ask_user_question` to present the gate to the user. " +
-              "Call `flow_continue` with the feature path to see the full gate options. " +
-              "Do NOT auto-answer the gate by calling `flow_record_gate` directly " +
-              "without asking the user first.**"
-            );
-            break;
+        // Handle done / block — show full status
+        if (outcome.action === "done" || outcome.action === "block") {
+          const lines: string[] = [];
+          lines.push(`Step result: **${params.result}**`);
+          if (outcome.warnings?.length) {
+            lines.push("", "Warnings:");
+            for (const warning of outcome.warnings) {
+              lines.push(`- ${warning}`);
+            }
           }
-          case "block":
-            lines.push(`❌ Blocked: ${outcome.error || params.message}`);
-            break;
-          case "done":
+          if (outcome.action === "done") {
             lines.push("🎉 Workflow complete!");
-            break;
+          } else {
+            lines.push(`❌ Blocked: ${outcome.error || params.message}`);
+          }
+          lines.push("", ...renderWorkflowStatus(outcome.state));
+          return textResult(lines.join("\n"), {
+            action: outcome.action,
+            featurePath: outcome.featurePath,
+          });
         }
 
-        lines.push("", ...renderWorkflowStatus(outcome.state));
-
-        return textResult(lines.join("\n"), {
-          action: outcome.action,
-          featurePath: outcome.featurePath,
-        });
+        // Handle advance / retry
+        return textResult(
+          `Step ${outcome.state.current_step_index + 1} ` +
+          `(${outcome.state.steps[outcome.state.current_step_index]?.agent ?? "?"}) advanced: ${outcome.action}`,
+          {
+            action: outcome.action,
+            featurePath: outcome.featurePath,
+            warnings: outcome.warnings,
+            stepResult: params.result,
+            stepMessage: params.message,
+          }
+        );
       } catch (err) {
         return errorResult(`Error completing step: ${(err as Error).message}`);
       }
@@ -378,6 +514,24 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
       featurePath: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String()),
     }),
+    renderCall(args, theme) {
+      return renderFlowCall(
+        "flow_gate",
+        theme,
+        args.chosenLabel ? `${args.advance ? "✅" : "❌"} ${args.chosenLabel}` : undefined
+      );
+    },
+
+    renderResult(result, options, theme) {
+      if (options.expanded) {
+        const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+        return new Text(`\n${textContent}`, 0, 0);
+      }
+      const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+      
+      return new Text(theme.fg("muted", truncate(textContent, 60)), 0, 0);
+    },
+
     async execute(
       _toolCallId: string,
       params: { advance: boolean; chosenLabel?: string; abort?: boolean; feedback?: string; featurePath?: string; projectRoot?: string },
@@ -431,20 +585,29 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
           return textResult("Failed to record gate answer.");
         }
 
-        // Sync widget after gate answer
+        // Notify the widget to refresh after gate answer
+        onStateChange?.();
 
+        // Show status for in_progress (advance or retry)
+        if (isRunningWorkflow(outcome.state)) {
+          const status = outcome.state.steps[outcome.state.current_step_index];
+          return textResult(
+            `Gate "${actualLabel}" recorded — step ${outcome.state.current_step_index + 1} ` +
+            `(${status?.agent ?? "?"}) continues`,
+            {
+              action: outcome.action,
+              featurePath: outcome.featurePath,
+              advance: actualAdvance,
+              chosenLabel: actualLabel,
+            }
+          );
+        }
+
+        // Otherwise show full status (done, abort, block)
         const lines: string[] = [];
         lines.push(`Gate answered: ${actualAdvance ? "✅ Approved" : "❌ Not approved"}`);
 
-        if (outcome.action === "advance") {
-          lines.push("→ Advancing to next step.");
-        } else if (outcome.action === "retry") {
-          lines.push("↻ Same step will re-run.");
-          const feedback = outcome.state.steps[current.gate.stepIndex]?.last_feedback;
-          if (feedback) {
-            lines.push("", "Feedback:", feedback);
-          }
-        } else if (outcome.action === "done") {
+        if (outcome.action === "done") {
           lines.push("🎉 Workflow complete!");
         } else if (outcome.action === "abort") {
           lines.push("🛑 Workflow aborted.");
@@ -477,6 +640,24 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
       featurePath: Type.Optional(Type.String({ description: "Feature path (defaults to active workflow)" })),
       projectRoot: Type.Optional(Type.String()),
     }),
+    renderCall(args, theme) {
+      return renderFlowCall(
+        "flow_status",
+        theme,
+        args.featurePath
+      );
+    },
+
+    renderResult(result, options, theme) {
+      if (options.expanded) {
+        const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+        return new Text(`\n${textContent}`, 0, 0);
+      }
+      const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+      
+      return new Text(theme.fg("muted", truncate(textContent, 60)), 0, 0);
+    },
+
     async execute(
       _toolCallId: string,
       params: { featurePath?: string; projectRoot?: string },
@@ -495,7 +676,21 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         );
       }
 
-      // Enrich with subagent activity
+      // When running, show current status
+      if (isRunningWorkflow(current)) {
+        const childRuns = listCorrelatedSubagentRuns(current, 6);
+        const status = current.steps[current.current_step_index];
+        return textResult(
+          `Workflow "${current.feature}" in progress — step ${current.current_step_index + 1} (${status?.agent ?? "?"})`,
+          {
+            status: current.status,
+            featurePath: current.feature_path,
+            childRuns: childRuns.map((r) => ({ id: r.id, agents: r.agents, state: r.state })),
+          }
+        );
+      }
+
+      // Otherwise show full status (awaiting_user, done, blocked, abandoned)
       const childRuns = listCorrelatedSubagentRuns(current, 6);
       const statusLines = renderWorkflowStatus(current, {
         childRuns,
@@ -521,6 +716,19 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
     parameters: Type.Object({
       projectRoot: Type.Optional(Type.String()),
     }),
+    renderCall(args, theme) {
+      return renderFlowCall("flow_list", theme);
+    },
+
+    renderResult(result, options, theme) {
+      if (options.expanded) {
+        const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+        return new Text(`\n${textContent}`, 0, 0);
+      }
+      const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+      return new Text(theme.fg("muted", truncate(textContent, 60)), 0, 0);
+    },
+
     async execute(
       _toolCallId: string,
       params: { projectRoot?: string },
@@ -553,7 +761,7 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
     name: "flow_continue",
     label: "Continue Flow",
     description:
-      "Detect the active workflow's state and perform the obvious next action automatically. If the workflow is in_progress, loads the current step instructions (same as flow_step). If awaiting a gate, returns the gate details formatted for presentation. If done or blocked, returns the final status. This is the preferred tool for resuming or continuing a workflow.",
+      "Detect the active workflow's state and perform the obvious next action automatically. If the workflow is in_progress, loads the current step instructions (same as flow_step). If awaiting a gate, returns the gate details formatted for presentation. If done or blocked, returns the final status.",
     promptSnippet:
       "Continue the active workflow automatically — step if runnable, present gate if awaiting approval, or report final status",
     parameters: Type.Object({
@@ -561,6 +769,24 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
       agentsDir: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String({ description: "Project root (defaults to cwd)" })),
     }),
+    renderCall(args, theme) {
+      return renderFlowCall(
+        "flow_continue",
+        theme,
+        args.featurePath
+      );
+    },
+
+    renderResult(result, options, theme) {
+      if (options.expanded) {
+        const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+        return new Text(`\n${textContent}`, 0, 0);
+      }
+      const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+      
+      return new Text(theme.fg("muted", truncate(textContent, 60)), 0, 0);
+    },
+
     async execute(
       _toolCallId: string,
       params: { featurePath?: string; agentsDir?: string; projectRoot?: string },
@@ -613,7 +839,7 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         );
       }
 
-      // In progress — delegate to flow_step
+      // In progress — load step instructions
       const instruction = engine.step(projectRoot, {
         featurePath: current.feature_path,
       });
@@ -624,52 +850,28 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         );
       }
 
-      const lines: string[] = [
-        `Continuing workflow "${current.feature}".`,
-        "",
-        `**Step ${instruction.stepIndex + 1}: ${instruction.agent}**`,
-        `Attempt: ${instruction.attempt}/${instruction.maxAttempts}`,
-        `Approval required: ${instruction.requestApproval ? "yes" : "no"}`,
-        `Tools: ${instruction.tools.join(", ")}`,
-      ];
-
-      if (instruction.subagents) {
-        lines.push(`Subagents: ${Object.keys(instruction.subagents).join(", ")}`);
-      }
-      if (instruction.parallel) {
-        lines.push(
-          `Parallel: ${instruction.parallel.subagent} over ${instruction.parallel.over} (concurrency: ${instruction.parallel.concurrency ?? "default"})`
-        );
-      }
-      if (instruction.expectedOutputs?.length) {
-        lines.push(`Expected outputs: ${instruction.expectedOutputs.join(", ")}`);
-      }
-      if (instruction.lastFeedback) {
-        lines.push(`Previous feedback: ${instruction.lastFeedback}`);
-      }
-      if (instruction.lastError) {
-        lines.push(`Previous error: ${instruction.lastError}`);
-      }
-      if (instruction.approvalManifest) {
-        lines.push(
-          `Approval gate: "${instruction.approvalManifest.header}" with ${instruction.approvalManifest.options.length} option(s)`
-        );
-      }
-      lines.push("", "---", "", "## Agent Prompt", "", instruction.prompt);
-
-      if (instruction.subagentInstructions) {
-        lines.push("", "## Subagent Prompts");
-        for (const [name, subagent] of Object.entries(instruction.subagentInstructions)) {
-          lines.push("", `### ${name} (${subagent.path})`, `Tools: ${subagent.tools.join(", ")}`, "", subagent.prompt);
+      return textResult(
+        `Step ${instruction.stepIndex + 1} (${instruction.agent}) loaded — ` +
+        `attempt ${instruction.attempt}/${instruction.maxAttempts}`,
+        {
+          action: "advance",
+          agent: instruction.agent,
+          stepIndex: instruction.stepIndex,
+          attempt: instruction.attempt,
+          maxAttempts: instruction.maxAttempts,
+          tools: instruction.tools,
+          subagents: instruction.subagents ?? {},
+          parallel: instruction.parallel,
+          expectedOutputs: instruction.expectedOutputs,
+          lastFeedback: instruction.lastFeedback,
+          lastError: instruction.lastError,
+          requestApproval: instruction.requestApproval,
+          approvalManifest: instruction.approvalManifest,
+          prompt: instruction.prompt,
+          subagentInstructions: instruction.subagentInstructions,
+          featurePath: current.feature_path,
         }
-      }
-
-      return textResult(lines.join("\n"), {
-        action: "advance",
-        agent: instruction.agent,
-        stepIndex: instruction.stepIndex,
-        featurePath: current.feature_path,
-      });
+      );
     },
   });
 
@@ -684,6 +886,23 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
       featurePath: Type.Optional(Type.String()),
       projectRoot: Type.Optional(Type.String()),
     }),
+    renderCall(args, theme) {
+      return renderFlowCall(
+        "flow_abort",
+        theme,
+        args.featurePath
+      );
+    },
+
+    renderResult(result, options, theme) {
+      if (options.expanded) {
+        const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+        return new Text(`\n${textContent}`, 0, 0);
+      }
+      const textContent = result.content.find((c) => c.type === "text")?.text ?? "";
+      return new Text(theme.fg("muted", truncate(textContent, 60)), 0, 0);
+    },
+
     async execute(
       _toolCallId: string,
       params: { featurePath?: string; projectRoot?: string },
@@ -697,6 +916,9 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
       if (!result) {
         return textResult("No active workflow to abort.");
       }
+
+      // Notify the widget to clear the step summary
+      onStateChange?.();
 
       return textResult(`Workflow "${result.feature}" (${result.feature_path}) marked as abandoned.`, {
         featurePath: result.feature_path,
