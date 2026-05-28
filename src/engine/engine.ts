@@ -91,15 +91,22 @@ function workspacePrefix(featurePath: string): string {
   );
 }
 
-const COMPLETION_SUFFIX =
-  "\n\n## Important\n\n" +
-  "Follow the instructions above carefully. Do not skip steps or complete this step " +
-  "without doing the work described. The workflow expects the declared output files " +
-  "to exist. If you do not write them, the workflow will block.\n\n" +
-  "## Completion\n\n" +
-  "When you have finished all the work described above, stop. " +
-  "Do not ask what to do next. Do not offer to continue. " +
-  "The workflow will advance automatically.";
+function completionSuffix(strictOutputs: boolean): string {
+  const blockMsg = strictOutputs
+    ? "If you do not write them, the workflow will block."
+    : "If you do not write them, warnings will appear when you complete the step.";
+
+  return (
+    "\n\n## Important\n\n" +
+    "Follow the instructions above carefully. Do not skip steps or complete this step " +
+    "without doing the work described. The workflow expects the declared output files " +
+    `to exist. ${blockMsg}\n\n` +
+    "## Completion\n\n" +
+    "When you have finished all the work described above, stop. " +
+    "Do not ask what to do next. Do not offer to continue. " +
+    "The workflow will advance automatically."
+  );
+}
 
 const APPROVAL_INSTRUCTION =
   "\n\n## Approval Gate\n\n" +
@@ -258,7 +265,7 @@ export function step(
       "\n\n" +
       loaded.prompt +
       (flowStep.requestApproval ? APPROVAL_INSTRUCTION : "") +
-      COMPLETION_SUFFIX,
+      completionSuffix(state.flow_snapshot.strictOutputs ?? true),
     requestApproval: flowStep.requestApproval ?? false,
     approvalManifest: flowStep.requestApproval ? loaded.manifest.approval : undefined,
     attempt: currentWsStep?.attempt ?? 1,
@@ -316,7 +323,7 @@ export function stepComplete(
   const flowStep = currentStep(state);
 
   // --- Strict output check (blocks success if declared outputs are missing) ---
-  const strictOutputs = state.flow_snapshot.strictOutputs ?? false;
+  const strictOutputs = state.flow_snapshot.strictOutputs ?? true;
   if (paramsSucceeded(result) && flowStep && strictOutputs) {
     const missing = verifyExpectedOutputs(agentsDir, projectRoot, resolved.featurePath, flowStep.agent);
     if (missing.length > 0) {

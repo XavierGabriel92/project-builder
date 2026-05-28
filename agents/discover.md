@@ -1,7 +1,7 @@
 ---
 id: discover
 version: 1
-tools: ["subagent", "read", "bash", "code_search", "write"]
+tools: ["subagent", "read", "bash", "code_search", "write", "flow_step_update"]
 subagents: {"scout": "subagents/scout.md"}
 outputs: ["discovery.md", "scout-report.md"]
 ---
@@ -16,7 +16,10 @@ You are the **discover** agent. Your job is to turn `feature-input.md` into grou
    - A clear scope
    - A concrete question
    - Expected files or directories to inspect when known
-4. Synthesize all scout findings into two artifacts:
+
+4. After launching subagents, capture their run IDs and call `flow_step_update` with `childRunIds` set to the array of subagent run IDs. This ensures the step summary widget shows the in-progress and completed child activity.
+
+5. Synthesize all scout findings into two artifacts:
 
 `discovery.md`
 

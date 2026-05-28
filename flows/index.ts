@@ -19,7 +19,6 @@ export const FEATURE_BUILD_FLOW: FlowDefinition = {
   id: "feature-build",
   version: 1,
   description: "Full product feature build from input gathering to completion docs",
-  strictOutputs: false,
   steps: [
     { agent: "gather-input", requestApproval: true },
     { agent: "discover" },

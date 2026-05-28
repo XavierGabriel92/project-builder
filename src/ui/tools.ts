@@ -436,6 +436,17 @@ export function registerTools(
         // Notify the widget to refresh after step completion
         onStateChange?.();
 
+        // Helper to append warnings if present
+        function withWarnings(lines: string[], warnings: string[] | undefined): string[] {
+          if (warnings?.length) {
+            lines.push("", "⚠️ Warnings:");
+            for (const warning of warnings) {
+              lines.push(`- ${warning}`);
+            }
+          }
+          return lines;
+        }
+
         // Handle gate — always show full content so the user can answer
         if (outcome.action === "gate") {
           const lines: string[] = [
@@ -448,10 +459,12 @@ export function registerTools(
             "Do NOT auto-answer the gate by calling `flow_record_gate` directly " +
             "without asking the user first.**",
           ];
+          withWarnings(lines, outcome.warnings);
           return textResult(lines.join("\n"), {
             action: outcome.action,
             featurePath: outcome.featurePath,
             gate: { header: outcome.gate!.header, stepIndex: outcome.gate!.stepIndex },
+            warnings: outcome.warnings,
           });
         }
 
@@ -478,17 +491,19 @@ export function registerTools(
         }
 
         // Handle advance / retry
-        return textResult(
+        const actionLabel = outcome.action === "retry" ? "retrying" : "advanced";
+        const advanceLines: string[] = [
           `Step ${outcome.state.current_step_index + 1} ` +
-          `(${outcome.state.steps[outcome.state.current_step_index]?.agent ?? "?"}) advanced: ${outcome.action}`,
-          {
-            action: outcome.action,
-            featurePath: outcome.featurePath,
-            warnings: outcome.warnings,
-            stepResult: params.result,
-            stepMessage: params.message,
-          }
-        );
+          `(${outcome.state.steps[outcome.state.current_step_index]?.agent ?? "?"}) ${actionLabel}: ${outcome.action}`,
+        ];
+        withWarnings(advanceLines, outcome.warnings);
+        return textResult(advanceLines.join("\n"), {
+          action: outcome.action,
+          featurePath: outcome.featurePath,
+          warnings: outcome.warnings,
+          stepResult: params.result,
+          stepMessage: params.message,
+        });
       } catch (err) {
         return errorResult(`Error completing step: ${(err as Error).message}`);
       }
