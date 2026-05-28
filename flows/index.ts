@@ -8,26 +8,25 @@
 import type { FlowDefinition } from "../src/shared/types.ts";
 
 /**
- * The built-in 10-step feature-build pipeline.
+ * The built-in 8-step feature-build pipeline.
  *
- * Steps:
- *   gather-input (gate) → discover → clarify (gate) → spec-write (gate) →
- *   research (gate) → plan (gate, 2 attempts) → implement (2 attempts) →
- *   review → doc-sync → complete
+ * gather-input → discover → spec-write (gate) → plan →
+ * implement (2 attempts) → review (gate) → doc-sync → complete
+ *
+ * Merges: clarify into discover, research into spec-write.
+ * Enhanced: implement uses task-based worker fan-out.
  */
 export const FEATURE_BUILD_FLOW: FlowDefinition = {
   id: "feature-build",
-  version: 1,
+  version: 2,
   description: "Full product feature build from input gathering to completion docs",
   steps: [
     { agent: "gather-input", requestApproval: true },
     { agent: "discover" },
-    { agent: "clarify", requestApproval: true },
     { agent: "spec-write", requestApproval: true },
-    { agent: "research", requestApproval: true },
-    { agent: "plan", requestApproval: true, attempts: 2 },
+    { agent: "plan" },
     { agent: "implement", attempts: 2 },
-    { agent: "review" },
+    { agent: "review", requestApproval: true },
     { agent: "doc-sync" },
     { agent: "complete" },
   ],

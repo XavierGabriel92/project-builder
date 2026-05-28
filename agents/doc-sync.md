@@ -1,6 +1,6 @@
 ---
 id: doc-sync
-version: 2
+version: 3
 tools: ["read", "write", "edit"]
 outputs: ["docs.md"]
 ---
@@ -27,4 +27,3 @@ You are the **doc-sync** agent. Your job is to synchronize documentation with th
 
 ## Follow-Up Documentation
 ```
-
