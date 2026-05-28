@@ -1,13 +1,13 @@
-# Project Builder — Pure Engine Library
+# Project Builder — Pi Extension
 
-A domain-agnostic flow orchestration **engine** (not a Pi extension). Defines workflows as ordered lists of agents, each self-described in markdown. The engine advances steps based on supervisor-submitted results and user approval gates.
+A domain-agnostic flow orchestration **engine** with full Pi integration (tools, TUI dashboard, slash commands, gate dialogs). Defines workflows as ordered lists of agents, each self-described in markdown. The engine advances steps based on supervisor-submitted results and user approval gates.
 
-> **This is a library with no Pi integration.** All user-facing features (tools, TUI dashboard, slash commands, gate dialogs) live in the **project-builder-ui** extension (sibling directory).
+> **Self-contained Pi extension.** The engine (`src/engine/`) is a pure library with no Pi dependencies. The UI layer (`src/ui/`) wires it into Pi as custom tools, a live TUI dashboard widget, and slash commands.
 
 ## Architecture
 
 ```
-project-builder/               (engine — pure library)
+project-builder/               (self-contained Pi extension)
 ├── src/engine/                ← state machine, transitions, agent loading
 │   ├── engine.ts              ← public API: start, step, stepComplete, stepUpdate, recordGate, status, list, abort
 │   ├── transitions.ts         ← pure state machine transitions (no I/O)
@@ -18,6 +18,12 @@ project-builder/               (engine — pure library)
 │   ├── types.ts               ← FlowDefinition, AgentManifest, WorkflowState, etc.
 │   ├── persistence.ts         ← atomic read/write of workflow.json
 │   └── frontmatter.ts         ← YAML frontmatter parser for agent .md files
+├── src/ui/                    ← Pi integration: tools, dashboard, commands
+│   ├── index.ts               ← Extension entry point (pi.extensions)
+│   ├── engine-context.ts      ← Engine lifecycle wrapper, agentsDir resolution
+│   ├── tools.ts               ← All 8 flow_* tools registered as Pi custom tools
+│   ├── ui.ts                  ← TUI dashboard widget (compact/expanded), status bar
+│   └── commands.ts            ← Slash commands (/pb, /pb-list, /pb-status, /pb-expand)
 └── agents/                    ← reference agent manifests
     ├── implement.md
     ├── plan.md
@@ -30,8 +36,9 @@ Three layers:
 1. **Flows** define order, retries, and whether a step needs approval.
 2. **Agents** (`agents/*.md`) define tools, subagents, parallel fan-out, approval UI, expected outputs, and the prompt.
 3. **Engine** persists `workflow.json` and advances the state machine.
+4. **UI** (`src/ui/`) wires the engine into Pi as custom tools, a live TUI dashboard, and slash commands.
 
-Flows say **when**. Agents say **how**.
+Flows say **when**. Agents say **how**. The UI makes it interactive.
 
 ## Engine API
 
@@ -92,4 +99,4 @@ npm run scaffold:agent -- worker --subagent     # Create subagent template
 
 ## Related
 
-- **project-builder-ui** (sibling) — Pi extension with tool registration, TUI dashboard, slash commands, and gate UI.
+- **project-builder** was previously split into a pure engine library (`project-builder`) and a separate Pi extension (`project-builder-ui`). They are now merged into a single self-contained package. The `project-builder-ui` extension has been removed.
