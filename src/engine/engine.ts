@@ -68,6 +68,19 @@ const COMPLETION_SUFFIX =
   "Do not ask what to do next. Do not offer to continue. " +
   "The workflow will advance automatically.";
 
+const APPROVAL_INSTRUCTION =
+  "\n\n## Approval Gate\n\n" +
+  "After you submit `flow_step_complete` with `result: \"success\"`, this step will " +
+  "pause for user approval before the workflow advances. " +
+  "When the approval gate appears, you MUST use `ask_user_question` to present " +
+  "the gate options to the user. " +
+  "Do NOT call `flow_record_gate` directly without the user's explicit choice. " +
+  "Only after the user picks an option should you call `flow_record_gate` " +
+  "with their answer.\n\n" +
+  "If the user has given you general instructions to proceed without asking " +
+  "(e.g., \"do not ask questions, keep going\"), you may auto-answer the gate. " +
+  "Otherwise, always ask first.";
+
 const SUBAGENT_COMPLETION_SUFFIX =
   "\n\n## Completion\n\n" +
   "When you have finished, stop. Return your results to the orchestrator. " +
@@ -211,6 +224,7 @@ export function step(
       workspacePrefix(resolved.featurePath) +
       "\n\n" +
       loaded.prompt +
+      (flowStep.requestApproval ? APPROVAL_INSTRUCTION : "") +
       COMPLETION_SUFFIX,
     requestApproval: flowStep.requestApproval ?? false,
     attempt: currentWsStep?.attempt ?? 1,

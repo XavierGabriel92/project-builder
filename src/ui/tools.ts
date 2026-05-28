@@ -305,16 +305,12 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
           case "gate": {
             lines.push(`⛔ **Approval required: ${outcome.gate!.header}**`);
             lines.push("");
-            for (const opt of outcome.gate!.options) {
-              const suffixes = [
-                opt.advance ? "advances" : "",
-                opt.feedback ? "requires feedback" : "",
-                opt.abort ? "aborts" : "",
-              ].filter(Boolean);
-              lines.push(
-                `  - **${opt.label}**${suffixes.length ? ` (${suffixes.join(", ")})` : ""}: ${opt.description}`
-              );
-            }
+            lines.push(
+              "**IMPORTANT: Use `ask_user_question` to present the gate to the user. " +
+              "Call `flow_continue` with the feature path to see the full gate options. " +
+              "Do NOT auto-answer the gate by calling `flow_record_gate` directly " +
+              "without asking the user first.**"
+            );
             break;
           }
           case "block":
@@ -344,7 +340,9 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
     name: "flow_record_gate",
     label: "Record Gate Answer",
     description:
-      "Answer an approval gate. If the chosen option has advance: true, the flow moves to the next step. Otherwise, the current step is reset for re-run. Options marked feedback: true require a non-empty feedback string.",
+      "Record the user's answer to an approval gate. If the chosen option has advance: true, the flow moves to the next step. Otherwise, the current step is reset for re-run. Options marked feedback: true require a non-empty feedback string.\n\n" +
+      "CRITICAL: Only call this tool AFTER the user has given their explicit answer via ask_user_question. " +
+      "Never auto-answer a gate without user confirmation.",
     promptSnippet: "Answer an approval gate in an active workflow",
     parameters: Type.Object({
       advance: Type.Boolean({ description: "Whether the chosen option means 'approved' (should match the agent's advance field)" }),
@@ -569,7 +567,10 @@ export function registerTools(pi: ExtensionAPI, engine: EngineContext): void {
         }
         lines.push(
           "",
-          "**Present these options to the user with `ask_user_question`.** After the user answers, call `flow_record_gate` with their choice. If they approve, immediately call `flow_step` again."
+          "**CRITICAL — You MUST present these options to the user with `ask_user_question`.** " +
+          "Do NOT call `flow_record_gate` directly without the user's explicit answer. " +
+          "Only after the user responds, call `flow_record_gate` with their choice. " +
+          "If they approve, immediately call `flow_step` again."
         );
         lines.push("", ...renderWorkflowStatus(current));
 
