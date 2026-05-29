@@ -6,40 +6,143 @@ A **domain-agnostic flow orchestration engine** with full Pi integration (custom
 
 ## Quick Start
 
+Navigate to any project folder and start a Pi interactive session:
+
 ```bash
-# Validate all agent manifests
-npm run validate
-
-# Run unit tests
-npm test
-
-# Scaffold a new agent
-npm run scaffold:agent -- my-agent --approval
-npm run scaffold:agent -- worker --subagent
+cd my-project
+pi
 ```
+
+Inside Pi, type the slash command to launch the project-builder:
+
+```
+/project-builder
+```
+
+This opens an interactive menu where you:
+1. **Pick a flow** — e.g. `feature-build` (the built-in 8-step pipeline)
+2. **Name your feature** — e.g. `user-auth`
+3. **Start or resume** — pick an active workflow to resume, or kick off a new one
+
+Once started, Pi guides you step-by-step through the pipeline. Each step describes what to do, which tools are available, and (for gated steps) pauses for your approval before advancing.
+
+> **Tip:** Use `/pb-list` to see all workflow runs or `/pb-status` to check the current step.
+
+## How the Engine Works
+
+The engine is built around two simple types: `FlowDefinition` and `FlowStep`. Together they form a **declarative pipeline** — you describe *what* to run and *when*, and the engine handles the state machine, persistence, and user gates.
+
+### `FlowDefinition`
+
+A flow is an ordered list of steps plus metadata. It says **when** — the agent `.md` files say **how**.
+
+```typescript
+interface FlowDefinition {
+  id: string;              // Unique name, e.g. "feature-build"
+  version: number;         // Schema version for migration logic
+  description: string;     // Human-readable label shown in /project-builder
+  strictOutputs?: boolean; // If true, missing output files block step completion
+  steps: FlowStep[];       // Ordered pipeline
+}
+```
+
+| Property | What it does |
+|----------|-------------|
+| `id` | Identifies the flow. Stored in `WorkflowState.flow_id` and shown in the `/project-builder` menu. |
+| `version` | Schema version, useful if you evolve flow definitions over time. |
+| `description` | Human-readable summary displayed when the user picks a flow. |
+| `strictOutputs` | When `true`, `flow_step_complete` with `"success"` **blocks** if the agent's declared output files are missing. Defaults to `false` (warnings only). |
+| `steps` | The heart of the flow — an ordered array of `FlowStep`. The engine walks through them one by one. |
+
+### `FlowStep`
+
+Each step maps to one agent manifest and configures its behavior:
+
+```typescript
+interface FlowStep {
+  agent: string;              // → agents/{agent}.md
+  requestApproval?: boolean;  // Pause for user gate after success
+  attempts?: number;          // Max retries on error (default: 1)
+  model?: string;             // Optional LLM override for this step
+}
+```
+
+| Property | What it does |
+|----------|-------------|
+| `agent` | Maps to `agents/{agent}.md`. The agent manifest defines tools, prompt, subagents, parallel config, and the approval dialog UI. |
+| `requestApproval` | If `true`, after the supervisor reports `result: "success"`, the workflow pauses in `"awaiting_user"` state. The LLM presents the approval dialog from the agent manifest, and the workflow only advances once the user explicitly approves. |
+| `attempts` | Max retry count on error. The engine increments an attempt counter at each `flow_step` call. If the step fails with `retryable: true` and attempts remain, the step resets to `"pending"` for re-execution. Once exhausted, the workflow goes to `"blocked"`. |
+| `model` | Optional model override (e.g. `"google/gemini-2.5-pro"`). Passed through to `StepInstruction.model` — the executor can use it to route this step to a different LLM. |
+
+### How they work together
+
+```
+FlowDefinition.steps  ───  FlowStep.agent  ───→  agents/{agent}.md
+                           (maps to)              (tools, prompt, subagents,
+                                                   approval dialog)
+
+                                 ───→  Engine state machine
+                                       (order, retries, gates,
+                                        frozen snapshot)
+```
+
+The flow definition is **frozen** at `flow_start` time via deep clone into `WorkflowState.flow_snapshot`. Mid-run mutations to the original flow object have no effect — guaranteeing reproducible runs.
 
 ## Built-in Feature-Build Pipeline
 
-The reference 10-step pipeline `feature-build`:
+The reference pipeline is `FEATURE_BUILD_FLOW` from `flows/index.ts`:
+
+```typescript
+export const FEATURE_BUILD_FLOW: FlowDefinition = {
+  id: "feature-build",
+  version: 2,
+  description: "Full product feature build from input gathering to completion docs",
+  steps: [
+    { agent: "gather-input", requestApproval: true },
+    { agent: "discover" },
+    { agent: "spec-write", requestApproval: true },
+    { agent: "plan" },
+    { agent: "implement", attempts: 2 },
+    { agent: "review", requestApproval: true },
+    { agent: "doc-sync" },
+    { agent: "complete" },
+  ],
+};
+```
+
+**8-step pipeline** (clarify merged into discover, research merged into spec-write):
 
 ```
-gather-input → discover → clarify → spec-write → research → plan → implement → review → doc-sync → complete
+gather-input (gate) → discover → spec-write (gate) → plan →
+implement (2 attempts) → review (gate) → doc-sync → complete
 ```
 
-Each step produces artifacts in `.temp/{featurePath}/`:
+| Step | Agent | Outputs | Gate? | Notes |
+|------|-------|---------|-------|-------|
+| `gather-input` | `agents/gather-input.md` | `feature-input.md` | ✅ | User reviews input before discovery |
+| `discover` | `agents/discover.md` | `discovery.md`, `scout-report.md` | | Merges clarify + research into a single discovery phase |
+| `spec-write` | `agents/spec-write.md` | `spec.md` | ✅ | Writes spec from discovery output, user approves before planning |
+| `plan` | `agents/plan.md` | `plan.md`, `service-dirs.json` | | Produces implementation plan and service directory list |
+| `implement` | `agents/implement.md` | `implementation-notes.md` | | 2 attempts on error; uses worker subagents with parallel fan-out |
+| `review` | `agents/review.md` | `review-findings.md` | ✅ | Code review, user signs off before doc sync |
+| `doc-sync` | `agents/doc-sync.md` | `docs.md` | | Generates reference documentation |
+| `complete` | `agents/complete.md` | `summary.md`, per-service docs | | Final summary and cleanup |
 
-| Step          | Outputs                                              | Gate? |
-|---------------|------------------------------------------------------|-------|
-| `gather-input` | `feature-input.md`                                   | ✅    |
-| `discover`     | `discovery.md`, `scout-report.md`                    |       |
-| `clarify`      | `clarifications.md`                                  | ✅    |
-| `spec-write`   | `spec.md`                                            | ✅    |
-| `research`     | `research.md`                                        | ✅    |
-| `plan`         | `plan.md`, `service-dirs.json`                       | ✅    |
-| `implement`    | `implementation-notes.md`                            |       |
-| `review`       | `review-findings.md`                                 |       |
-| `doc-sync`     | `docs.md`                                            |       |
-| `complete`     | `summary.md`, per-service reference docs             |       |
+### How it plays out live
+
+1. User runs `/project-builder` in a Pi session, picks `feature-build`, names their feature (e.g. `user-auth`).
+2. **`flow_start`** freezes the flow definition into a snapshot — the original can't affect the run anymore.
+3. The engine walks through the 8 steps in order. At each **`flow_step`** call:
+   - Resolves `agents/{agent}.md`, parses its YAML frontmatter, and builds the prompt with workspace context.
+   - Marks the step `"running"` and returns the `StepInstruction` (tools + prompt + subagents).
+4. The LLM executes the agent's instructions, optionally reporting progress via **`flow_step_update`**.
+5. On **`flow_step_complete`**:
+   - **No gate** → advances `current_step_index` by 1.
+   - **Gate step** (`requestApproval: true`) → transitions to `"awaiting_user"`. The LLM presents the approval dialog (from the agent manifest) via `ask_user_question`. The user can approve (advance), reject with feedback (retry step), or abort (abandon workflow).
+   - **Error** with `attempts: 2` on `implement` → resets to `"pending"` for one retry. If it fails again, the workflow goes `"blocked"`.
+6. After the final step (`complete`), the workflow reaches `"done"`.
+
+All artifacts land in `.temp/{DD-MM-YYYY-feature-name}/` — one directory per run, no collisions.
 
 ## Architecture Overview
 
@@ -65,10 +168,14 @@ project-builder/
 ├── agents/                  ← Reference agent manifests
 │   ├── subagents/           ← Subagent manifests (worker, scout, reviewer)
 │   └── *.md                 ← 10 main agents
+├── docs/                    ← Documentation
+│   ├── ARCHITECTURE.md      ← Architecture deep-dive
+│   ├── AGENT-MANIFEST-SCHEMA.md  ← Agent manifest schema reference
+│   └── ENGINE-STATE-MACHINE.md   ← State machine documentation
 └── scripts/                 ← Validation & scaffolding utilities
 ```
 
-**See `ARCHITECTURE.md` for the full deep-dive.**
+**See `docs/ARCHITECTURE.md` for the full deep-dive.**
 
 ## Three Conceptual Layers
 
@@ -129,8 +236,17 @@ npm run scaffold:agent -- my-agent --approval   # Create main agent
 npm run scaffold:agent -- worker --subagent     # Create subagent
 ```
 
+## Slash Commands
+
+| Command | Purpose |
+|---------|---------|
+| `/project-builder` | Interactive flow selection, naming, start/resume |
+| `/pb-list` | List all workflow runs |
+| `/pb-status` | Show current step status |
+| `/pb-expand` | Toggle TUI dashboard compact/expanded mode |
+
 ## Related
 
-- **ARCHITECTURE.md** — Full architecture deep-dive with data flow diagrams
-- **AGENT-MANIFEST-SCHEMA.md** — Complete reference for agent .md frontmatter
-- **ENGINE-STATE-MACHINE.md** — State machine documentation (states, transitions, sequence diagrams)
+- **`docs/ARCHITECTURE.md`** — Full architecture deep-dive with data flow diagrams
+- **`docs/AGENT-MANIFEST-SCHEMA.md`** — Complete reference for agent .md frontmatter
+- **`docs/ENGINE-STATE-MACHINE.md`** — State machine documentation (states, transitions, sequence diagrams)
