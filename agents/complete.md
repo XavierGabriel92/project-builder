@@ -105,92 +105,47 @@ You are the **complete** agent. Your job is to produce the final workflow summar
 - If a previous state.md exists, keep earlier entries and add new ones
 - Number decision/blocker/lesson IDs sequentially (AD-001, AD-002, etc.)
 
-### Phase 4: Persist Service References
+### Phase 4: Resolve Target Paths
 
-5. For each directory in `workflow.json.service_dirs`, create a feature reference directory at:
+5. Read `workflow.json` and extract:
+   - `feature_path` — the workflow directory name (e.g. `24-05-2026-ultimas-atividades`)
+   - `feature` — the feature name
+   - `service_dirs` — array of service directories touched during this build
+   - `project_root` — absolute path to the project root
+   - `flow_id` and `flow_version` — pipeline identifiers
+   - `steps` — step results for build metadata
 
-```
-{service}/references/features/{feature_path}/
-```
+   Determine the list of services to persist to:
+   - If `workflow.json.service_dirs` is a non-empty array, use it
+   - Otherwise, read `service-dirs.json` (which contains `{"service_dirs": [...]}`)
+   - If both are empty/missing, fall back to `["."]` (the project root itself)
 
-Where `{feature_path}` comes from `workflow.json.feature_path`. The target directory will look like:
+   Each service entry in `service_dirs` is a relative path resolved against
+   `workflow.json.project_root`. For example:
+   ```
+   project_root = "/Users/user/project"
+   service_dir = "services/personal-ai-api"
+   → full path = "/Users/user/project/services/personal-ai-api"
+   ```
 
-```
-{service}/references/features/24-05-2026-ultimas-atividades-bug-on-trainer-clients-id-overview-page/
-├── info.md                ← generated (see below)
-├── spec.md                ← copied from workflow spec.md
-├── plan.md                ← copied from workflow plan.md (if exists)
-├── research-brief.md      ← copied from workflow research.md (if exists)
-├── doc-sync.md            ← copied from workflow docs.md (if exists)
-├── report.json            ← generated (see below)
-├── decisions.jsonl        ← generated from state.md decisions (if any)
-├── feature-summary.md     ← generated (concise summary)
-├── learnings.md           ← generated (lessons learned)
-└── maintenance.md         ← generated (watch points and follow-ups)
-```
+### Phase 5: Persist Service References
 
-**Copy existing artifacts** (read from current workflow directory, write to target):
-- `spec.md` → `{service}/references/features/{feature_path}/spec.md`
-- `plan.md` → `{service}/references/features/{feature_path}/plan.md` (if exists)
-- `research.md` → `{service}/references/features/{feature_path}/research-brief.md` (if exists)
-- `docs.md` → `{service}/references/features/{feature_path}/doc-sync.md` (if exists)
+6. For each service in the resolved list, create the feature reference directory and write 3 summary documents.
 
-**Generate `info.md`** — build metadata document. Follow the established convention:
+**Important: These are writes to the project tree, NOT to .temp/.**
+The workspace prefix told you to write outputs to `.temp/{feature_path}/` — but this
+phase writes to `{project_root}/{service_dir}/references/features/{feature_path}/`.
+These are permanent reference docs that live alongside the source code, not ephemeral
+workflow artifacts. You MUST create the full directory path under the project root.
 
-```markdown
-# {feature-slug} — Build Info ({service-name})
+Read all workflow artifacts from `.temp/{feature_path}/` (spec.md, plan.md,
+research.md, docs.md, implementation-notes.md, review-findings.md, state.md,
+summary.md) to synthesize the 3 output files. The source artifacts stay in `.temp/`
+— do not copy them into the reference directory.
 
-- **Started:** {date}
-- **Description:** {one-line description of what was built}
-- **Breaking Changes:** Yes/No
-- **API Changes:** {description of any API contract changes, or "None"}
-- **Services involved:** {comma-separated list of affected services}
+Generate these 3 files in each service's feature directory:
 
-## Phase {N} Status: DONE | SKIPPED
-
-- **Reason:** {what happened in this phase}
-- **Concerns:** {any concerns, or "None"}
-
-... (one section per pipeline step, skip sections for phases that didn't run)
-
-## Final Status: DONE
-
-- {summary of what was achieved}
-- {list of key outcomes}
-
-## Aggregate Summary
-
-- **Services:** {count}
-- **Total runs:** {count}
-```
-
-**Generate `report.json`:**
-
-```json
-{
-  "feature": "{workflow.json.feature}",
-  "date": "{YYYY-MM-DD}",
-  "flow_id": "{workflow.json.flow_id}",
-  "steps": [
-    {
-      "index": 0,
-      "agent": "gather-input",
-      "status": "completed",
-      "attempts": 1
-    }
-  ],
-  "service_dirs": {workflow.json.service_dirs}
-}
-```
-
-**Generate `decisions.jsonl`** (one JSON object per line, from state.md decisions):
-
-```jsonl
-{"id": "AD-001", "decision": "...", "reason": "...", "date": "...", "feature": "..."}
-{"id": "AD-002", "decision": "...", "reason": "...", "date": "...", "feature": "..."}
-```
-
-**Generate `feature-summary.md`:**
+**a) `feature-summary.md`** — concise what/why for developers:
 
 ```markdown
 # Feature Summary
@@ -212,40 +167,40 @@ Where `{feature_path}` comes from `workflow.json.feature_path`. The target direc
 {How the feature was verified}
 ```
 
-**Generate `learnings.md`** (from implementation-notes.md and state.md lessons):
+**b) `learnings.md`** — domain insights, pitfalls, and rationale:
 
 ```markdown
 # Learnings
 
 ## {Topic}
 
-{Lesson/insight}
+{Lesson/insight — why a decision was made, what was learned during implementation}
 ```
 
-**Generate `maintenance.md`:**
+**c) `maintenance.md`** — what future developers need to watch out for:
 
 ```markdown
 # Maintenance
 
 ## Watch Points
 
-- {thing to watch out for}
+- {thing to watch out for — fragile areas, coupling, edge cases}
 
 ## Known Follow-Ups
 
 - {unresolved issue or deferred work}
 ```
 
-### Phase 5: Update Features Index
+### Phase 6: Update Features Index
 
-6. For each service, ensure `{service}/references/features/README.md` exists and includes an entry for this feature.
+7. For each service, ensure `{service_full_path}/references/features/README.md` exists and includes an entry for this feature.
 
 If the README already exists, read it and add a new row to the index table:
 
 ```markdown
 | Feature | Date | Description |
 |---------|------|-------------|
-| [{feature-slug}]({feature_path}/info.md) | {date} | {one-line description} |
+| [{feature-slug}]({feature_path}/feature-summary.md) | {date} | {one-line description} |
 ```
 
 If it doesn't exist, create it:
@@ -257,7 +212,5 @@ This directory contains records of feature builds executed by the project-builde
 
 | Feature | Date | Description |
 |---------|------|-------------|
-| [{feature-slug}]({feature_path}/info.md) | {date} | {one-line description} |
+| [{feature-slug}]({feature_path}/feature-summary.md) | {date} | {one-line description} |
 ```
-
-If `service_dirs` is empty or missing, use the project root as the single service.
