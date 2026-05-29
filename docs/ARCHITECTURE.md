@@ -51,7 +51,7 @@ At `flow_start` time, the flow definition is **deep-cloned** into `workflow.json
 ```
 ┌────────────────────────────────────────────────────────────┐
 │                     Pi Integration (src/ui/)                │
-│  tools.ts  ·  ui.ts  ·  commands.ts  ·  engine-context.ts  │
+│  tools.ts  ·  step-summary-widget.ts  ·  commands.ts  ·  engine-context.ts  │
 │  Registers: 9 flow_* tools, TUI dashboard, /pb commands    │
 │  Depends on: @earendil-works/pi-* packages                 │
 ├────────────────────────────────────────────────────────────┤
@@ -136,17 +136,14 @@ At `flow_start` time, the flow definition is **deep-cloned** into `workflow.json
 - Uses `typebox` for parameter schemas
 - Enriches responses with `renderWorkflowStatus()` and `listCorrelatedSubagentRuns()`
 
-**`ui.ts`** — TUI dashboard widget:
-- Spinner animation, compact/expanded toggle
+**`step-summary-widget.ts`** — TUI dashboard widget:
+- Expanded view of current step with details: phase, tools, child subagent runs
 - Auto-refresh for running steps (200ms interval)
 - Auto-detects most recent active workflow
 - Line truncation to terminal width
 
 **`commands.ts`** — Slash commands:
-- `/pb` — workflow hub: list, start, resume, hide dashboard
-- `/pb-list` — list all runs
-- `/pb-status` — show current step status
-- `/pb-expand` — toggle dashboard compact/expanded
+- `/project-builder` — interactive flow selection, naming, start/resume
 
 ---
 
@@ -571,7 +568,7 @@ This separation means tools.ts never directly imports agentsDir — it goes thro
 | `src/ui/index.ts` | ~25 | Extension entry point | Yes |
 | `src/ui/engine-context.ts` | ~50 | Engine lifecycle wrapper, agentsDir resolution | Yes |
 | `src/ui/tools.ts` | ~550 | 9 custom Pi flow_* tool registrations | Yes |
-| `src/ui/ui.ts` | ~160 | TUI dashboard widget | Yes |
+| `src/ui/step-summary-widget.ts` | ~160 | TUI dashboard widget | Yes |
 | `src/ui/commands.ts` | ~150 | Slash commands | Yes |
 
 ---

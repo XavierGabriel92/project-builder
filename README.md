@@ -26,7 +26,7 @@ This opens an interactive menu where you:
 
 Once started, Pi guides you step-by-step through the pipeline. Each step describes what to do, which tools are available, and (for gated steps) pauses for your approval before advancing.
 
-> **Tip:** Use `/pb-list` to see all workflow runs or `/pb-status` to check the current step.
+> **Tip:** Use `/project-builder` to start, resume, or list workflow runs.
 
 ## How the Engine Works
 
@@ -51,7 +51,7 @@ interface FlowDefinition {
 | `id` | Identifies the flow. Stored in `WorkflowState.flow_id` and shown in the `/project-builder` menu. |
 | `version` | Schema version, useful if you evolve flow definitions over time. |
 | `description` | Human-readable summary displayed when the user picks a flow. |
-| `strictOutputs` | When `true`, `flow_step_complete` with `"success"` **blocks** if the agent's declared output files are missing. Defaults to `false` (warnings only). |
+| `strictOutputs` | When `true`, `flow_step_complete` with `"success"` **blocks** if the agent's declared output files are missing. Defaults to `true` (blocks on missing outputs). |
 | `steps` | The heart of the flow — an ordered array of `FlowStep`. The engine walks through them one by one. |
 
 ### `FlowStep`
@@ -163,11 +163,13 @@ project-builder/
 │       ├── index.ts         ← Extension entry point (pi.extensions)
 │       ├── engine-context.ts← Engine lifecycle wrapper, agentsDir resolution
 │       ├── tools.ts         ← All 9 flow_* tools (Pi custom tool registration)
-│       ├── ui.ts            ← TUI dashboard widget (compact/expanded)
-│       └── commands.ts      ← Slash commands (/pb, /pb-list, etc.)
+│       ├── step-summary-widget.ts  ← TUI dashboard widget (step status display)
+│       └── commands.ts            ← Slash commands (/project-builder)
 ├── agents/                  ← Reference agent manifests
 │   ├── subagents/           ← Subagent manifests (worker, scout, reviewer)
-│   └── *.md                 ← 10 main agents
+│   └── *.md                 ← 8 main agents
+├── skills/                  ← Editable agent creation skill
+│   └── agent-creation-guide/
 ├── docs/                    ← Documentation
 │   ├── ARCHITECTURE.md      ← Architecture deep-dive
 │   ├── AGENT-MANIFEST-SCHEMA.md  ← Agent manifest schema reference
@@ -200,6 +202,7 @@ Flows say **when**. Agents say **how**. The engine says **what happens next**.
 | `status(projectRoot, featurePath?)` | Read current workflow state |
 | `list(projectRoot)` | List all workflow runs |
 | `abort(projectRoot, featurePath?)` | Abandon a workflow |
+| `cleanupWorkflows(projectRoot, olderThanDays)` | Remove old completed/blocked/abandoned workflows |
 
 ## Pi Tools
 
@@ -241,12 +244,14 @@ npm run scaffold:agent -- worker --subagent     # Create subagent
 | Command | Purpose |
 |---------|---------|
 | `/project-builder` | Interactive flow selection, naming, start/resume |
-| `/pb-list` | List all workflow runs |
-| `/pb-status` | Show current step status |
-| `/pb-expand` | Toggle TUI dashboard compact/expanded mode |
+
+## Skills
+
+This package includes a skill at `src/skills/agent-creation-guide/SKILL.md` that provides an authoritative reference for creating new agents (main and subagent). It covers YAML frontmatter schema, tool selection rules, subagent wiring, parallel execution, approval gates, and common pitfalls.
 
 ## Related
 
 - **`docs/ARCHITECTURE.md`** — Full architecture deep-dive with data flow diagrams
 - **`docs/AGENT-MANIFEST-SCHEMA.md`** — Complete reference for agent .md frontmatter
 - **`docs/ENGINE-STATE-MACHINE.md`** — State machine documentation (states, transitions, sequence diagrams)
+- **`src/skills/agent-creation-guide/SKILL.md`** — Agent creation skill
