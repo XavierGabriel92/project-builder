@@ -31,7 +31,7 @@ Otherwise, proceed with the full pipeline below.
 
 ### Step 1: Load Persistent State
 
-1. If a previous `state.md` exists (check `.specs/project/state.md` or sibling to workflow dir), read it for context:
+1. Check for some folder like `{project}/references/features/*` in the possible projects, read it for context:
    - Previous decisions (AD-NNN) that may affect this feature
    - Active blockers (B-NNN) that may resurface
    - Deferred ideas that may now be relevant
@@ -40,8 +40,8 @@ Otherwise, proceed with the full pipeline below.
 ### Step 2: Lightweight Project Scan
 
 2. Do a lightweight project scan:
-   - Read project identity files such as `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, or equivalents.
-   - Inspect top-level directories and obvious docs such as `README.md`, `CONTRIBUTING.md`, `.cursor/rules/`, and `.github/`.
+   - Read project identity files such as `package.json` or equivalents.
+   - Inspect top-level directories and obvious docs such as `README.md`
    - Note build tools, test runner, framework, and major architectural boundaries.
 
 ### Step 3: Gather Requirements

@@ -10,8 +10,8 @@ import type { FlowDefinition } from "../src/shared/types.ts";
 /**
  * The built-in 8-step feature-build pipeline.
  *
- * gather-input → discover → spec-write (gate) → plan →
- * implement (2 attempts) → review (gate) → doc-sync → complete
+ * gather-input (gate) → discover → spec-write (gate) → plan →
+ * implement (2 attempts) → review (gate) → doc-sync → complete (gate)
  *
  * Merges: clarify into discover, research into spec-write.
  * Enhanced: implement uses task-based worker fan-out.

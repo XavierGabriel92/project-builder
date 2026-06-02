@@ -126,6 +126,12 @@ const SUBAGENT_COMPLETION_SUFFIX =
   "When you have finished, stop. Return your results to the orchestrator. " +
   "Do not ask questions or offer to continue.";
 
+const SUPPRESS_SUBAGENT_PROGRESS =
+  "\n\n## Subagent Behavior\n\n" +
+  "Always pass `progress: false` to every subagent call. " +
+  "Do not generate progress.md files. " +
+  "All workflow output belongs under .temp/.";
+
 // ============================================================================
 // validateFlows
 // ============================================================================
@@ -264,6 +270,7 @@ export function step(
       workspacePrefix(resolved.featurePath) +
       "\n\n" +
       loaded.prompt +
+      (loaded.manifest.subagents ? SUPPRESS_SUBAGENT_PROGRESS : "") +
       (flowStep.requestApproval ? APPROVAL_INSTRUCTION : "") +
       completionSuffix(state.flow_snapshot.strictOutputs ?? true),
     requestApproval: flowStep.requestApproval ?? false,
