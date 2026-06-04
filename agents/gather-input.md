@@ -1,6 +1,6 @@
 ---
 id: gather-input
-version: 3
+version: 4
 tools: ["ask_user_question", "read", "bash", "write"]
 outputs: ["feature-input.md"]
 approval: {"header": "Feature Input", "preview": "feature-input.md", "options": [{"label": "Proceed", "description": "Input is complete enough to start discovery", "advance": true}, {"label": "Refine", "description": "Ask more questions or gather more context", "advance": false, "feedback": true}]}
@@ -29,13 +29,61 @@ hand off to the implement step.
 
 Otherwise, proceed with the full pipeline below.
 
-### Step 1: Load Persistent State
+### Step 1: Find Past Implementations in `references/`
 
-1. Check for some folder like `{project}/references/features/*` in the possible projects, read it for context:
-   - Previous decisions (AD-NNN) that may affect this feature
-   - Active blockers (B-NNN) that may resurface
-   - Deferred ideas that may now be relevant
-   - Lessons learned from previous runs
+Search `references/features/` directories across the project for prior feature
+work. Each completed feature run persists permanent reference docs there. The goal
+is to surface relevant decisions, lessons, and prior implementations so the new
+feature builds on what already exists rather than rediscovering it.
+
+**Search these locations — stop early if you have enough context:**
+
+#### A. Project-level references
+
+Look for `references/features/` at the project root:
+
+```bash
+# Find all feature reference directories at the top level
+find . -maxdepth 3 -path '*/references/features/*' -name 'feature-summary.md' 2>/dev/null
+```
+
+If found, read the `README.md` index first, then explore summaries whose
+descriptions sound relevant to the current request.
+
+#### B. Service-level references
+
+Check for features organized inside service/module directories:
+
+```bash
+# Find feature references inside any deeper directory
+find . -path '*/*/references/features/*' -name 'feature-summary.md' 2>/dev/null
+```
+
+#### C. What each reference file contains
+
+For every `references/features/{feature_path}/` directory, three files exist:
+
+| File | Contents |
+|------|----------|
+| `feature-summary.md` | What was built, breaking changes, API contract changes |
+| `learnings.md` | Domain insights, pitfalls avoided, rationale behind key decisions |
+| `maintenance.md` | Fragile areas, known follow-ups, deferred work |
+
+Also read the sibling `README.md` for the full index of features in that location.
+
+#### D. Relevance matching
+
+When deciding whether a past feature relates to this request, consider:
+- **Keyword overlap**: Does the past feature name or description share terms with
+the current request?
+- **Module overlap**: Do the files or services touched overlap?
+- **Constraint impact**: Do past decisions or maintenance notes constrain the
+approach for this feature?
+- **Deferred work**: Does `maintenance.md` list follow-ups that match the current
+request?
+
+If you find nothing relevant, record that you searched and found no prior work —
+this is still useful context.
 
 ### Step 2: Lightweight Project Scan
 
@@ -72,6 +120,30 @@ Otherwise, proceed with the full pipeline below.
 - Top-level layout:
 - Relevant modules:
 - Conventions observed:
+
+## Previous Work
+
+### Related Features
+| Feature | Date | Relevance |
+|---------|------|-----------|
+| [feature-name](../references/features/YYYY-MM-DD-feature/feature-summary.md) | MM-YYYY | Why relevant |
+
+### Key Decisions from Past Work
+- **[decision]**: [what was decided and why] — [implication for this feature]
+  _(from `learnings.md`)_
+
+### Maintenance Watch Points
+- **[watch point]**: [fragile area or known follow-up] — [impact on this feature]
+  _(from `maintenance.md`)_
+
+### Deferred Work Now Relevant
+- [deferred item] — [why now]
+  _(from `maintenance.md`)_
+
+### Search Summary
+- Locations searched: `references/features/` at project root, service directories
+- Found: N feature directories; M relevant
+- Nothing relevant found? State that explicitly.
 
 ## Requirements
 

@@ -32,5 +32,27 @@ export const FEATURE_BUILD_FLOW: FlowDefinition = {
   ],
 };
 
+/**
+ * The built-in 6-step bug-fix pipeline.
+ *
+ * triage (gate) → reproduce → diagnose → fix (2 attempts) → verify (gate) → complete (gate)
+ *
+ * Optimized for diagnosing and fixing bugs — narrower scope, reproduction-first,
+ * root-cause-driven. No spec-writing, no plan, no doc-sync.
+ */
+export const BUG_FIX_FLOW: FlowDefinition = {
+  id: "bug-fix",
+  version: 1,
+  description: "Bug diagnosis and fix from issue triage to verified resolution",
+  steps: [
+    { agent: "triage", requestApproval: true },
+    { agent: "reproduce" },
+    { agent: "diagnose" },
+    { agent: "fix", attempts: 2 },
+    { agent: "verify", requestApproval: true },
+    { agent: "complete" },
+  ],
+};
+
 /** All flows registered in this package. */
-export const allFlows: FlowDefinition[] = [FEATURE_BUILD_FLOW];
+export const allFlows: FlowDefinition[] = [FEATURE_BUILD_FLOW, BUG_FIX_FLOW];

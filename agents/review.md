@@ -1,6 +1,6 @@
 ---
 id: review
-version: 3
+version: 4
 tools: ["read", "subagent", "bash", "write"]
 subagents: {"reviewer": "subagents/reviewer.md"}
 outputs: ["review-findings.md"]
@@ -32,6 +32,7 @@ You are the **review** agent. Your job is to review all changes made during impl
    - Record: total tests, passed, failed, skipped
    - Check test integrity: compare test count against before-feature count.
      If decreased, each deletion must be justified.
+   - Run `npm exec -- ultracite check` — non-zero exit = STOP. Fix and re-run.
 
    ### Code Quality Check
    Verify against coding principles:
@@ -40,6 +41,15 @@ You are the **review** agent. Your job is to review all changes made during impl
    - [ ] Only files listed in tasks were modified
    - [ ] No "improvements" to unrelated code
    - [ ] Matches existing patterns and style
+   - [ ] `ultracite check` passes with zero issues
+   - [ ] Code follows Ultracite standards:
+     - Type safety: explicit types, `unknown` over `any`, no magic numbers
+     - Modern JS/TS: arrow fns, `for...of`, optional chaining, template literals
+     - Async: always `await`, `async/await` over chains, try-catch for errors
+     - No debugging artifacts (`console.log`, `debugger`, `alert`)
+     - Error objects thrown (not strings), early returns over deep nesting
+     - Security: `rel="noopener"`, no `eval()`, no bare `dangerouslySetInnerHTML`
+     - Performance: no spread in accumulators, top-level regex, specific imports
    - [ ] Would a senior engineer approve?
 
    ### SPEC_DEVIATION Audit
@@ -72,6 +82,12 @@ You are the **review** agent. Your job is to review all changes made during impl
 - After count: [M]
 - Delta: [+/- (M-N)]
 - Tests weakened/skipped: [list]
+
+## Ultracite Compliance
+- `ultracite check`: [PASS/FAIL]
+- Style violations: [list, if any]
+- Debugging artifacts: [list, if any]
+- Type safety issues: [list, if any]
 
 ## SPEC_DEVIATION Audit
 - [N] markers found — [all justified / needs discussion]

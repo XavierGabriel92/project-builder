@@ -1,6 +1,6 @@
 ---
 id: complete
-version: 6
+version: 7
 tools: ["read", "write", "bash"]
 outputs: ["summary.md", "state.md"]
 approval: {"header": "Completion", "preview": "state.md", "options": [{"label": "Approve", "description": "Documentation is complete and correct. Mark workflow as done.", "advance": true}, {"label": "Request changes", "description": "Documentation needs revisions before completing", "advance": false, "feedback": true}, {"label": "Exit", "description": "Stop the workflow", "advance": false, "abort": true}]}
@@ -118,10 +118,19 @@ You are the **complete** agent. Your job is to produce the final workflow summar
    - `flow_id` and `flow_version` — pipeline identifiers
    - `steps` — step results for build metadata
 
-   Determine the list of services to persist to:
-   - If `workflow.json.service_dirs` is a non-empty array, use it
-   - Otherwise, read `service-dirs.json` (which contains `{"service_dirs": [...]}`)
-   - If both are empty/missing, fall back to `["."]` (the project root itself)
+   Determine the list of services to persist to. Try each source in order until you get a non-empty array:
+
+   **Step A:** Check `workflow.json.service_dirs`. If it's a non-empty array, use it.
+
+   **Step B:** Read `service-dirs.json`. It should be `{"service_dirs": [...]}`, but past bugs have produced wrong keys. Parse it resiliently:
+   - If it has a `"service_dirs"` key → use its array value
+   - If it has a `"directories"` key → use `["."]` as fallback AND print a warning in your summary.md that service-dirs.json used the wrong key
+   - If it's a plain JSON array (e.g. `["frontend", "backend"]`) → use it directly
+   - If it's a nested object like `{"backend": {...}, "frontend": {...}}` → use `["."]` as fallback
+
+   **Step C:** If all previous steps yield nothing, fall back to `["."]` (the project root itself).
+
+   **⚠️ If you end up using the fallback `["."]`, you MUST note this in summary.md under "Known Limitations" so developers know why reference docs landed at the project root instead of per-service.**
 
    Each service entry in `service_dirs` is a relative path resolved against
    `workflow.json.project_root`. For example:
@@ -131,15 +140,19 @@ You are the **complete** agent. Your job is to produce the final workflow summar
    → full path = "/Users/user/project/services/personal-ai-api"
    ```
 
-### Phase 5: Persist Service References
+### 🔴 Phase 5: Persist Service References (DO NOT SKIP)
 
 6. For each service in the resolved list, create the feature reference directory and write 3 summary documents.
 
-**Important: These are writes to the project tree, NOT to .temp/.**
-The workspace prefix told you to write outputs to `.temp/{feature_path}/` — but this
-phase writes to `{project_root}/{service_dir}/references/features/{feature_path}/`.
-These are permanent reference docs that live alongside the source code, not ephemeral
-workflow artifacts. You MUST create the full directory path under the project root.
+**🚨 THIS PHASE WRITES TO THE PROJECT TREE, NOT TO .temp/. 🚨**
+
+The workspace prefix at the top of this prompt says to write outputs to `.temp/{feature_path}/` — IGNORE THAT INSTRUCTION for this phase. The workspace prefix applies to summary.md and state.md (Phases 2-3). This phase (and Phase 6) write permanent documentation that lives alongside the source code at paths like:
+
+```
+{project_root}/{service_dir}/references/features/{feature_path}/
+```
+
+These are NOT ephemeral workflow artifacts. You MUST create the full directory path under the project root using absolute paths constructed from `workflow.json.project_root`.
 
 Read all workflow artifacts from `.temp/{feature_path}/` (spec.md, plan.md,
 research.md, docs.md, implementation-notes.md, review-findings.md, state.md,

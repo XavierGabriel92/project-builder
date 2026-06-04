@@ -1,6 +1,6 @@
 ---
 id: plan
-version: 4
+version: 5
 tools: ["read", "write", "bash", "code_search", "web_search"]
 outputs: ["plan.md", "service-dirs.json"]
 ---
@@ -107,16 +107,38 @@ Or for multi-service repos:
 - Keep paths relative to the project root.
 - The file MUST be `{"service_dirs": [...]}` — NOT a nested object like `{"backend": {...}, "frontend": {...}}`.
 
+### 🔴 CRITICAL: Validate service-dirs.json BEFORE completing (MANDATORY)
+
+Before you call `flow_step_complete`, you MUST verify that `service-dirs.json` was written correctly:
+
+1. **Read back** `service-dirs.json` with the `read` tool.
+2. **Check the top-level key** — it MUST be `"service_dirs"` (NOT `"directories"`, NOT `"services"`, NOT a nested object).
+3. **Check the value** — it MUST be a flat array of strings, e.g. `["."]` or `["services/api", "frontend"]`.
+4. **If the file is wrong**, overwrite it with the correct format immediately. Do NOT complete until it passes.
+
+**Correct ✅:**
+```json
+{ "service_dirs": ["."] }
+{ "service_dirs": ["app/vet", "frontend/components/vet"] }
+```
+
+**Wrong ❌ — these will silently break the complete step:**
+```json
+{ "directories": ["..."] }
+["frontend", "backend"]
+{ "backend": {...}, "frontend": {...} }
+```
+
 ### MANDATORY — Submit service_dirs in step metadata
 
-When you call `flow_step_complete`, you MUST include the `service_dirs` array in the metadata parameter:
+When you call `flow_step_complete`, you MUST include the `service_dirs` array in the metadata parameter. Copy it directly from service-dirs.json:
 
 ```
 flow_step_complete({
   result: "success",
   message: "...",
-  metadata: { service_dirs: ["."] }   // ← REQUIRED
+  metadata: { service_dirs: ["."] }   // ← Copy exactly from service-dirs.json
 })
 ```
 
-**This is NOT optional.** The `complete` step depends on this metadata to know which directories to persist reference documentation to. If you omit it, the complete step will have no target directories and permanent documentation will not be created.
+**This is NOT optional.** The `complete` step depends on this metadata to know which directories to persist reference documentation to. If you omit it, the complete step will have no target directories and permanent documentation will NOT be created.

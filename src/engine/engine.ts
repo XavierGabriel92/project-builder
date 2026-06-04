@@ -127,10 +127,16 @@ const SUBAGENT_COMPLETION_SUFFIX =
   "Do not ask questions or offer to continue.";
 
 const SUPPRESS_SUBAGENT_PROGRESS =
-  "\n\n## Subagent Behavior\n\n" +
-  "Always pass `progress: false` to every subagent call. " +
-  "Do not generate progress.md files. " +
-  "All workflow output belongs under .temp/.";
+  "\n\n## Subagent Behavior — File Output Constraints\n\n" +
+  "Subagents must NOT write files to disk. Their results must be returned inline in the response.\n\n" +
+  "### When using the `tasks` array (parallel dispatch):\n" +
+  "- Do NOT set `output` on any task object — omit it entirely\n" +
+  "- Do NOT set `progress: true` on any task object — the engine defaults to `false`; do not override\n\n" +
+  "### When using single-agent mode:\n" +
+  "- Do NOT set the top-level `output` parameter\n" +
+  "- Do NOT set `includeProgress: true`\n\n" +
+  "### Rationale\n" +
+  "Workflow artifacts live under .temp/. Subagent output files and progress.md clutter the workspace and are never consumed by downstream steps.";
 
 // ============================================================================
 // validateFlows
