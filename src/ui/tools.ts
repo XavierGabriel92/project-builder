@@ -99,6 +99,7 @@ export function registerTools(
         ),
       }),
       featureName: Type.String({ description: "Human-readable name for what's being built (e.g. 'user-auth')" }),
+      featureContext: Type.Optional(Type.String({ description: "Open-text user description of what they want to build (injected into agent prompts)" })),
       agentsDir: Type.Optional(Type.String({ description: "Path to agents/ directory (defaults to {projectRoot}/agents)" })),
       serviceDirs: Type.Optional(Type.Array(Type.String({ description: "Service directories touched by the flow" }))),
       projectRoot: Type.Optional(Type.String({ description: "Project root directory (defaults to cwd)" })),
@@ -127,6 +128,7 @@ export function registerTools(
       params: {
         flowDefinition: FlowDefinition;
         featureName: string;
+        featureContext?: string;
         agentsDir?: string;
         serviceDirs?: string[];
         projectRoot?: string;
@@ -146,6 +148,7 @@ export function registerTools(
       try {
         const result = engine.start(params.flowDefinition, params.featureName, projectRoot, {
           serviceDirs: params.serviceDirs,
+          featureContext: params.featureContext,
         });
 
         // Return a concise summary

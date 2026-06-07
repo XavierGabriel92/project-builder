@@ -6,6 +6,10 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { Container, Editor, type Focusable, matchesKey, Text } from "@earendil-works/pi-tui";
+import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import type { EngineContext } from "./engine-context.ts";
 import { allFlows } from "../../flows/index.ts";
 
@@ -83,6 +87,117 @@ export function registerCommands(pi: ExtensionAPI, engine: EngineContext): void 
   });
 }
 
+// ============================================================================
+// Multi-line text input dialog (wraps Editor from pi-tui)
+// ============================================================================
+
+function buildEditorTheme(theme: Theme): EditorTheme {
+  return {
+    borderColor: (text: string) => theme.fg("borderMuted", text),
+    selectList: getSelectListTheme(),
+  };
+}
+
+/**
+ * A simple multi-line text input dialog using the Editor component.
+ * Shows a title, the editor with word wrapping, and help text.
+ * Submit with Enter, cancel with Escape, new line with Shift+Enter.
+ */
+class FeatureContextDialog extends Container implements Focusable {
+  private editor: Editor;
+  private tui: TUI;
+  private piTheme: Theme;
+  private onDone: (value: string | undefined) => void;
+  private title: string;
+
+  /** Focusable — propagate to child Editor for IME cursor positioning */
+  private _focused = false;
+  get focused(): boolean {
+    return this._focused;
+  }
+  set focused(value: boolean) {
+    this._focused = value;
+    this.editor.focused = value;
+  }
+
+  constructor(
+    tui: TUI,
+    piTheme: Theme,
+    title: string,
+    onDone: (value: string | undefined) => void,
+  ) {
+    super();
+    this.tui = tui;
+    this.piTheme = piTheme;
+    this.title = title;
+    this.onDone = onDone;
+
+    // Top border
+    this.addChild(new DynamicBorder((s: string) => piTheme.fg("accent", s)));
+
+    // Title
+    this.addChild(
+      new Text(piTheme.fg("accent", piTheme.bold(title)), 1, 0),
+    );
+
+    // Editor with padding
+    const editorTheme = buildEditorTheme(piTheme);
+    this.editor = new Editor(tui, editorTheme, { paddingX: 1 });
+    this.editor.onSubmit = (value: string) => {
+      const trimmed = value.trim();
+      onDone(trimmed || undefined);
+    };
+    this.addChild(this.editor);
+
+    // Help text
+    this.addChild(
+      new Text(
+        piTheme.fg("dim", "Shift+Enter for new line • Enter to submit • Esc to skip"),
+        1,
+        0,
+      ),
+    );
+
+    // Bottom border
+    this.addChild(new DynamicBorder((s: string) => piTheme.fg("accent", s)));
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, "escape")) {
+      this.onDone(undefined);
+      return;
+    }
+    this.editor.handleInput(data);
+    this.tui.requestRender();
+  }
+
+  override invalidate(): void {
+    super.invalidate();
+  }
+}
+
+/**
+ * Show a multi-line text input dialog using the Editor component.
+ * Returns the user's text, or undefined if cancelled.
+ */
+async function multilineInput(
+  ctx: ExtensionCommandContext,
+  title: string,
+): Promise<string | undefined> {
+  return ctx.ui.custom<string | undefined>((tui, piTheme, _kb, done) => {
+    const dialog = new FeatureContextDialog(tui, piTheme, title, done);
+    return {
+      render: (width: number) => dialog.render(width),
+      invalidate: () => dialog.invalidate(),
+      handleInput: (data: string) => { dialog.handleInput(data); },
+    };
+  });
+}
+
+// ============================================================================
+// Workflow start
+// ============================================================================
+
 async function startNewWorkflow(
   ctx: ExtensionCommandContext,
   engine: EngineContext,
@@ -110,6 +225,18 @@ async function startNewWorkflow(
     return undefined;
   }
 
+  // Collect open-text description of what the user wants to build
+  const featureContext = await multilineInput(
+    ctx,
+    "What do you want to build? (optional)",
+  );
+  // undefined means user cancelled the dialog (pressed Escape with empty text)
+  // empty string means user submitted with no text — treat as no context
+  if (featureContext === undefined) {
+    ctx.ui.notify("Cancelled", "info");
+    return undefined;
+  }
+
   // Validate flow
   try {
     engine.validateFlows([flow]);
@@ -120,7 +247,8 @@ async function startNewWorkflow(
 
   // Start workflow
   try {
-    const result = engine.start(flow, featureName.trim(), projectRoot);
+    const context = featureContext.trim() || undefined;
+    const result = engine.start(flow, featureName.trim(), projectRoot, { featureContext: context });
     return result.featurePath;
   } catch (err) {
     ctx.ui.notify(`Error starting flow: ${(err as Error).message}`, "error");

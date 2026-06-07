@@ -64,7 +64,7 @@ export function createEngineContext(agentsDir: string): EngineContext {
     agentsDir,
     validateFlows: (flows) => validateFlows(flows, agentsDir),
     start: (flow, featureName, projectRoot, opts) =>
-      start(flow, featureName, projectRoot, { ...opts, agentsDir }),
+      start(flow, featureName, projectRoot, { featureContext: opts?.featureContext, serviceDirs: opts?.serviceDirs, agentsDir }),
     step: (projectRoot, opts) =>
       step(projectRoot, { ...opts, agentsDir }),
     stepComplete: (result, projectRoot, opts) =>

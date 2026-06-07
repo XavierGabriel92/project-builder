@@ -215,6 +215,8 @@ export interface WorkflowState {
   gate?: WorkflowGate;
   steps: WorkflowStep[];
   service_dirs?: string[];
+  /** Free-form user description of the feature (collected at workflow start). Injected into every agent prompt. */
+  feature_context?: string;
   build_status?: "DONE" | "BLOCKED" | null;
 }
 

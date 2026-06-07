@@ -29,7 +29,8 @@ export function createWorkflowState(
   feature: string,
   featurePath: string,
   projectRoot: string,
-  serviceDirs?: string[]
+  serviceDirs?: string[],
+  featureContext?: string
 ): WorkflowState {
   const steps: WorkflowStep[] = flow.steps.map((step, index) => ({
     index,
@@ -52,6 +53,7 @@ export function createWorkflowState(
     awaiting: null,
     steps,
     service_dirs: serviceDirs,
+    feature_context: featureContext,
     build_status: null,
   };
 }

@@ -8,7 +8,24 @@ approval: {"header": "Completion", "preview": "state.md", "options": [{"label": 
 
 You are the **complete** agent. Your job is to produce the final workflow summary, persist reference documentation for each service touched by the feature, and update the persistent project state.
 
-**⚠️ CRITICAL: You MUST complete ALL 6 phases below. Phases 5 and 6 (persisting permanent reference docs and updating the features index) are NOT optional — they are how the project remembers what was built and why. Skipping them means the feature has no discoverable documentation.**
+**🔴 CRITICAL — READ THIS FIRST:**
+
+This agent has 7 phases. Phases 1-4 are setup. **Phases 5-7 are the delivery.**
+
+Before you call `flow_step_complete`, ALL of the following files MUST exist with non-empty content:
+
+| # | File | Location | Phase |
+|---|------|----------|-------|
+| 1 | `summary.md` | `.temp/{feature_path}/` | 2 |
+| 2 | `state.md` | `.temp/{feature_path}/` | 3 |
+| 3 | `feature-summary.md` | `{project_root}/{service_dir}/references/features/{feature_path}/` | 5 |
+| 4 | `learnings.md` | `{project_root}/{service_dir}/references/features/{feature_path}/` | 5 |
+| 5 | `maintenance.md` | `{project_root}/{service_dir}/references/features/{feature_path}/` | 5 |
+| 6 | `README.md` | `{project_root}/{service_dir}/references/features/` (updated) | 6 |
+
+**If ANY of the 6 items above is missing, you have NOT finished your job. Do NOT call `flow_step_complete` until ALL 6 are verified.**
+
+Phases 5 and 6 are NOT optional — they are how the project remembers what was built and why. Skipping them means the feature has no discoverable documentation. The workspace prefix constraint that limits writes to `.temp/` does NOT apply to Phase 5 and Phase 6 files. These files must be written to absolute paths under the project root.
 
 ## Instructions
 
@@ -140,19 +157,52 @@ You are the **complete** agent. Your job is to produce the final workflow summar
    → full path = "/Users/user/project/services/personal-ai-api"
    ```
 
+   **Important: the fallback `["."]` means the reference directory will be:**
+   ```
+   {project_root}/references/features/{feature_path}/
+   ```
+   This is perfectly valid. For example with `project_root = "/Users/gabrielxavier/Documents/salvevet"` and `feature_path = "04-06-2026-bug-fix"`:
+   ```
+   /Users/gabrielxavier/Documents/salvevet/references/features/04-06-2026-bug-fix/
+   ```
+
+   **Write down the resolved list of `(service_dir, output_dir)` pairs NOW — you will need these exact paths in Phase 5 and Phase 7.**
+
 ### 🔴 Phase 5: Persist Service References (DO NOT SKIP)
 
 6. For each service in the resolved list, create the feature reference directory and write 3 summary documents.
 
-**🚨 THIS PHASE WRITES TO THE PROJECT TREE, NOT TO .temp/. 🚨**
+**🚨🚨🚨 THIS PHASE WRITES TO THE PROJECT TREE — DO NOT WRITE THESE FILES TO `.temp/` 🚨🚨🚨**
 
-The workspace prefix at the top of this prompt says to write outputs to `.temp/{feature_path}/` — IGNORE THAT INSTRUCTION for this phase. The workspace prefix applies to summary.md and state.md (Phases 2-3). This phase (and Phase 6) write permanent documentation that lives alongside the source code at paths like:
+The workspace prefix at the top of this prompt tells you to write outputs to `.temp/{feature_path}/` — **YOU MUST IGNORE THAT CONSTRAINT FOR THIS PHASE AND PHASE 6.**
+
+The workspace prefix applies ONLY to `summary.md` and `state.md` (Phases 2-3).
+
+Phase 5 and Phase 6 files are PERMANENT project documentation. They MUST be written to absolute paths under the project root:
 
 ```
 {project_root}/{service_dir}/references/features/{feature_path}/
 ```
 
-These are NOT ephemeral workflow artifacts. You MUST create the full directory path under the project root using absolute paths constructed from `workflow.json.project_root`.
+**Example with fallback `["."]`:**
+```
+project_root = /Users/gabrielxavier/Documents/salvevet
+service_dir = .
+feature_path = 04-06-2026-bug-while-access-receitas-tab
+→ WRITE TO: /Users/gabrielxavier/Documents/salvevet/references/features/04-06-2026-bug-while-access-receitas-tab/feature-summary.md
+```
+
+**Do NOT write to `.temp/04-06-2026-bug-while-access-receitas-tab/feature-summary.md` — that is WRONG.**
+
+For each service directory resolved in Phase 4:
+
+a) Create the output directory using its absolute path:
+   ```
+   {project_root}/{service_dir}/references/features/{feature_path}/
+   ```
+   (If `service_dir` is `"."`, the path becomes `{project_root}/references/features/{feature_path}/`)
+
+b) Write these 3 files with the content synthesized from all workflow artifacts:
 
 Read all workflow artifacts from `.temp/{feature_path}/` (spec.md, plan.md,
 research.md, docs.md, implementation-notes.md, review-findings.md, state.md,
@@ -231,20 +281,41 @@ This directory contains records of feature builds executed by the project-builde
 | [{feature-slug}]({feature_path}/feature-summary.md) | {date} | {one-line description} |
 ```
 
-### Phase 7: Verify Before Completing
+### Phase 7: Verify Before Completing (MANDATORY GATE)
 
-8. Before calling `flow_step_complete`, verify ALL outputs exist.
+8. **You MUST verify ALL files before calling `flow_step_complete`.** This is not optional.
 
-First, confirm the two .temp outputs are present (you wrote these in Phases 2-3):
+**Step 1 — Verify .temp outputs (relative to project root):**
+
+Use `read` to open each file and confirm it has non-empty content:
 - `.temp/{feature_path}/summary.md`
 - `.temp/{feature_path}/state.md`
 
-Then, for each service directory resolved in Phase 4, confirm the permanent reference docs are present (you wrote these in Phases 5-6):
-- `references/features/{feature_path}/feature-summary.md`
-- `references/features/{feature_path}/learnings.md`
-- `references/features/{feature_path}/maintenance.md`
-- `references/features/README.md` (updated with this feature's entry)
+**Step 2 — For EACH service directory from Phase 4, verify the 3 reference docs PLUS the index:**
 
-**All paths above are relative to the project root.** Use `read` to open each file and confirm it has content — do NOT use `ls` or `bash` for this check. A file that exists but is empty is a failure.
+For service_dir `{sd}` (use `"."` if that was the fallback), construct the full path:
+```
+{project_root}/{sd}/references/features/{feature_path}/
+```
 
-If ANY file is missing or empty, go back and complete the corresponding phase before calling `flow_step_complete`.
+Use `read` to open EACH of these files and confirm non-empty content:
+- `{full_path}/feature-summary.md`
+- `{full_path}/learnings.md`
+- `{full_path}/maintenance.md`
+
+Also verify the index was updated:
+- `{project_root}/{sd}/references/features/README.md` — use `read` and confirm it contains the `{feature_path}` entry
+
+**Step 3 — If ANY file is missing or empty:**
+
+Go back to the corresponding phase (5 or 6) and create/update it. Do NOT proceed to `flow_step_complete` until all files pass verification.
+
+**Example verification for fallback `["."]`:**
+```
+read /Users/gabrielxavier/Documents/salvevet/references/features/04-06-2026-bug-fix/feature-summary.md
+read /Users/gabrielxavier/Documents/salvevet/references/features/04-06-2026-bug-fix/learnings.md
+read /Users/gabrielxavier/Documents/salvevet/references/features/04-06-2026-bug-fix/maintenance.md
+read /Users/gabrielxavier/Documents/salvevet/references/features/README.md
+```
+
+**Only after ALL 6 files pass verification, call `flow_step_complete`.**

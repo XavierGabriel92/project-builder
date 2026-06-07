@@ -83,12 +83,19 @@ function getCachedAgent(agentsDir: string, agentId: string, isSubagent = false):
 // Prompt Prefix / Suffix (injected by the engine, not written in agent .md files)
 // ============================================================================
 
-function workspacePrefix(featurePath: string): string {
-  return (
-    "## Workspace\n\n" +
+function workspacePrefix(featurePath: string, featureContext?: string): string {
+  let prefix = "## Workspace\n\n" +
     `Write all output files to .temp/${featurePath}/. ` +
-    "Read inputs from the same directory.\n"
-  );
+    "Read inputs from the same directory.\n";
+
+  if (featureContext) {
+    prefix +=
+      "\n## Feature Context\n\n" +
+      "The user provided this description of what they want to build:\n\n" +
+      `${featureContext}\n`;
+  }
+
+  return prefix;
 }
 
 function completionSuffix(strictOutputs: boolean): string {
@@ -170,6 +177,8 @@ export interface StartResult {
 
 export interface StartOptions {
   serviceDirs?: string[];
+  /** Open-text user description of what they want to build (collected at UI start). */
+  featureContext?: string;
   agentsDir: string;
 }
 
@@ -188,13 +197,13 @@ export function start(
   projectRoot: string,
   options: StartOptions
 ): StartResult {
-  const { serviceDirs, agentsDir } = options;
+  const { serviceDirs, featureContext, agentsDir } = options;
 
   // Validate that requestApproval steps have approval blocks
   validateFlowApproval(agentsDir, flow);
 
   const featurePath = resolveFeaturePath(featureName, projectRoot);
-  const state = createWorkflowState(flow, featureName, featurePath, projectRoot, serviceDirs);
+  const state = createWorkflowState(flow, featureName, featurePath, projectRoot, serviceDirs, featureContext);
 
   writeWorkflow(projectRoot, featurePath, state);
 
@@ -242,6 +251,7 @@ export function step(
 
   // Load agent manifest (cached)
   const loaded = getCachedAgent(agentsDir, flowStep.agent);
+  const featureContext = resolved.state.feature_context;
   const subagentInstructions = loaded.manifest.subagents
     ? Object.fromEntries(
         Object.entries(loaded.manifest.subagents).map(([name, relativePath]) => {
@@ -252,7 +262,7 @@ export function step(
               path: relativePath,
               tools: subagent.manifest.tools,
               prompt:
-                workspacePrefix(resolved.featurePath) +
+                workspacePrefix(resolved.featurePath, featureContext) +
                 "\n\n" +
                 subagent.prompt +
                 SUBAGENT_COMPLETION_SUFFIX,
@@ -273,7 +283,7 @@ export function step(
     subagentInstructions,
     parallel: loaded.manifest.parallel,
     prompt:
-      workspacePrefix(resolved.featurePath) +
+      workspacePrefix(resolved.featurePath, featureContext) +
       "\n\n" +
       loaded.prompt +
       (loaded.manifest.subagents ? SUPPRESS_SUBAGENT_PROGRESS : "") +
