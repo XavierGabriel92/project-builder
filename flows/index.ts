@@ -1,8 +1,7 @@
 /**
  * Shared flow definitions.
  *
- * Single source of truth for the feature-build pipeline and any other
- * reusable flow definitions. Import from here instead of hardcoding.
+ * Single source of truth for all pipelines. Import from here instead of hardcoding.
  */
 
 import type { FlowDefinition } from "../src/shared/types.ts";
@@ -10,19 +9,19 @@ import type { FlowDefinition } from "../src/shared/types.ts";
 /**
  * The built-in 8-step feature-build pipeline.
  *
- * gather-input (gate) → discover → spec-write (gate) → plan →
- * implement (2 attempts) → review (gate) → doc-sync → complete (gate)
+ * analyze (gate) → spec-write (gate) → plan → implement (2 attempts) →
+ * review (gate) → lint → doc-sync → complete (gate)
  *
- * Merges: clarify into discover, research into spec-write.
- * Enhanced: implement uses task-based worker fan-out.
+ * analyze merges: gather-input + discover into a single step with one output file.
+ * spec-write merges: research findings into spec.md (no separate research.md).
+ * implement uses task-based worker fan-out.
  */
 export const FEATURE_BUILD_FLOW: FlowDefinition = {
   id: "feature-build",
-  version: 2,
-  description: "Full product feature build from input gathering to completion docs",
+  version: 3,
+  description: "Full product feature build from analysis to completion docs",
   steps: [
-    { agent: "gather-input", requestApproval: true },
-    { agent: "discover" },
+    { agent: "analyze", requestApproval: true },
     { agent: "spec-write", requestApproval: true },
     { agent: "plan" },
     { agent: "implement", attempts: 2 },
@@ -55,5 +54,29 @@ export const BUG_FIX_FLOW: FlowDefinition = {
   ],
 };
 
+/**
+ * The built-in 5-step small-feature pipeline.
+ *
+ * analyze (gate) → spec-write → implement (2 attempts) → review (gate) → complete (gate)
+ *
+ * For well-scoped features: ≤10 files to change, no new dependencies,
+ * no architecture changes. Skips plan (no architectural decisions needed)
+ * and doc-sync (minimal doc impact — complete handles the essentials).
+ * The analyze agent's complexity assessment classifies features and
+ * suggests this flow for Quick-scope changes.
+ */
+export const SMALL_FEATURE_FLOW: FlowDefinition = {
+  id: "small-feature",
+  version: 1,
+  description: "Small feature — ≤10 files, no new deps, no architecture changes",
+  steps: [
+    { agent: "analyze", requestApproval: true },
+    { agent: "spec-write" },
+    { agent: "implement", attempts: 2 },
+    { agent: "review", requestApproval: true },
+    { agent: "complete" },
+  ],
+};
+
 /** All flows registered in this package. */
-export const allFlows: FlowDefinition[] = [FEATURE_BUILD_FLOW, BUG_FIX_FLOW];
+export const allFlows: FlowDefinition[] = [FEATURE_BUILD_FLOW, BUG_FIX_FLOW, SMALL_FEATURE_FLOW];

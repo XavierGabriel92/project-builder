@@ -16,22 +16,30 @@ import { registerCommands } from "./commands.ts";
 import { StepSummaryWidget } from "./step-summary-widget.ts";
 
 export default function (pi: ExtensionAPI) {
-  const projectRoot = process.cwd();
-  const agentsDir = resolveAgentsDir(projectRoot);
+  const agentsDir = resolveAgentsDir(process.cwd());
   const engine = createEngineContext(agentsDir);
 
-  // Create the step-summary widget (reads engine state for rendering)
-  const widget = new StepSummaryWidget(engine, projectRoot);
+  // Per-projectRoot widget instances so state is scoped to the active session.
+  // Tools pass projectRoot → we look up the correct widget and notify it.
+  const widgetsByProjectRoot = new Map<string, StepSummaryWidget>();
 
   // Register all flow_* tools (pass onStateChange callback so tools trigger widget refresh)
-  registerTools(pi, engine, () => widget.notifyChange());
+  registerTools(pi, engine, (projectRoot: string) => {
+    widgetsByProjectRoot.get(projectRoot)?.notifyChange();
+  });
 
   // Register slash commands
   registerCommands(pi, engine);
 
-  // Register the step-summary widget above the editor on session start
+  // Register the step-summary widget above the editor on session start.
+  // The widget is created per-session so it is scoped to the session's
+  // project root and does not leak workflow state across sessions.
   pi.on("session_start", (_event, ctx) => {
     if (!ctx.hasUI) return;
+
+    const projectRoot = ctx.cwd ?? process.cwd();
+    const widget = new StepSummaryWidget(engine, projectRoot);
+    widgetsByProjectRoot.set(projectRoot, widget);
 
     ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
       // Wire the requestRender callback to the TUI

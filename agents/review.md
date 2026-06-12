@@ -11,7 +11,7 @@ You are the **review** agent. Your job is to review all changes made during impl
 
 ## Instructions
 
-1. Read `spec.md`, `plan.md`, `implementation-notes.md`, and `discovery.md`.
+1. Read `spec.md`, `plan.md`, `implementation-notes.md`, and `analysis.md`.
 
 2. **Validation — run ALL of these checks:**
 

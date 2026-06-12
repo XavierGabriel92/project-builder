@@ -90,9 +90,8 @@ function workspacePrefix(
   projectRulesContext?: string
 ): string {
   let prefix = "## Workspace\n\n" +
-    `ALL output file paths in \`write\` tool calls MUST start with \`.temp/${featurePath}/\`. ` +
-    `Always write \`.temp/${featurePath}/plan.md\`, NOT \`plan.md\`. ` +
-    "Read inputs from the same directory.\n";
+    "ALL output file paths in write tool calls MUST start with .temp/" + featurePath + "/. " +
+    "Always write .temp/" + featurePath + "/plan.md, NOT plan.md.\n";
 
   // Project rules (auto-discovered) — injected before feature context
   // since rules apply to all steps and features
@@ -101,17 +100,44 @@ function workspacePrefix(
       "\n## Project Rules\n\n" +
       "The following rules, conventions, and architectural constraints were " +
       "discovered from the project. Follow them for every change you make.\n\n" +
-      `${projectRulesContext}\n`;
+      projectRulesContext + "\n";
   }
 
   if (featureContext) {
     prefix +=
       "\n## Feature Context\n\n" +
       "The user provided this description of what they want to build:\n\n" +
-      `${featureContext}\n`;
+      featureContext + "\n";
   }
 
   return prefix;
+}
+
+/**
+ * Build a digest of all previously completed steps from activity.message fields.
+ * Injected into every agent prompt so agents don't need to read every previous file.
+ */
+function previousStepsDigest(state: WorkflowState): string {
+  const completed = state.steps.filter(
+    (s) => s.status === "completed" && s.activity?.message
+  );
+  if (completed.length === 0) return "";
+
+  const lines: string[] = [
+    "## Previous Steps\n",
+    "These steps have already been completed. The summaries below provide enough " +
+    "context that you do NOT need to read their output files unless you need " +
+    "specific details beyond what is summarized here.\n",
+  ];
+
+  for (const step of completed) {
+    const msg = step.activity!.message!;
+    // Truncate long messages to ~300 chars to keep prompts lean
+    const short = msg.length > 300 ? msg.slice(0, 297) + "..." : msg;
+    lines.push("- **" + step.agent + "** (completed): " + short);
+  }
+
+  return lines.join("\n") + "\n";
 }
 
 function completionSuffix(strictOutputs: boolean): string {
@@ -123,7 +149,7 @@ function completionSuffix(strictOutputs: boolean): string {
     "\n\n## Important\n\n" +
     "Follow the instructions above carefully. Do not skip steps or complete this step " +
     "without doing the work described. The workflow expects the declared output files " +
-    `to exist. ${blockMsg}\n\n` +
+    "to exist. " + blockMsg + "\n\n" +
     "## Completion\n\n" +
     "When you have finished all the work described above, stop. " +
     "Do not ask what to do next. Do not offer to continue. " +
@@ -176,12 +202,12 @@ export function validateFlows(flows: FlowDefinition[], agentsDir: string): void 
       loadFlowAgents(agentsDir, flow);
       validateFlowApproval(agentsDir, flow);
     } catch (err) {
-      errors.push(`Flow "${flow.id}": ${(err as Error).message}`);
+      errors.push("Flow \"" + flow.id + "\": " + (err as Error).message);
     }
   }
 
   if (errors.length > 0) {
-    throw new Error(`Flow validation failed:\n${errors.map((e) => `  - ${e}`).join("\n")}`);
+    throw new Error("Flow validation failed:\n" + errors.map(function(e) { return "  - " + e; }).join("\n"));
   }
 }
 
@@ -290,6 +316,7 @@ export function step(
               prompt:
                 workspacePrefix(resolved.featurePath, featureContext, projectRulesContext) +
                 "\n\n" +
+                previousStepsDigest(state) +
                 subagent.prompt +
                 SUBAGENT_COMPLETION_SUFFIX,
             },
@@ -311,6 +338,7 @@ export function step(
     prompt:
       workspacePrefix(resolved.featurePath, featureContext, projectRulesContext) +
       "\n\n" +
+      previousStepsDigest(state) +
       loaded.prompt +
       (loaded.manifest.subagents ? SUPPRESS_SUBAGENT_PROGRESS : "") +
       (flowStep.requestApproval ? APPROVAL_INSTRUCTION : "") +
@@ -380,7 +408,7 @@ export function stepComplete(
         state,
         featurePath: resolved.featurePath,
         action: "block" as const,
-        error: `Strict output check failed:\n${missing.join("\n")}\nComplete the work and write the missing files before calling stepComplete again.`,
+        error: "Strict output check failed:\n" + missing.join("\n") + "\nComplete the work and write the missing files before calling stepComplete again.",
         warnings: missing,
       };
     }
@@ -465,7 +493,7 @@ function verifyExpectedOutputs(
   const workflowDir = getWorkflowDir(projectRoot, featurePath);
   return outputs
     .filter((output) => !fs.existsSync(path.join(workflowDir, output)))
-    .map((output) => `Expected output missing: ${output}`);
+    .map(function(output) { return "Expected output missing: " + output; });
 }
 
 // ============================================================================

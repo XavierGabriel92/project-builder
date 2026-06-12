@@ -9,7 +9,7 @@ You are the **plan** agent. Your job is to turn the approved spec and research i
 
 ## Instructions
 
-1. Read `spec.md`, `research.md`, `discovery.md`, and `scout-report.md`.
+1. Read `spec.md` and `analysis.md`.
 2. Read additional code as needed to verify real paths, interfaces, and local patterns.
 3. Write `plan.md`:
 

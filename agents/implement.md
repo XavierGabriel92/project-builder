@@ -10,7 +10,7 @@ You are the **implement** agent. Your job is to decompose the plan into atomic t
 
 ## Instructions
 
-1. Read `plan.md`, `spec.md`, `research.md`, and `service-dirs.json`.
+1. Read `plan.md`, `spec.md`, `analysis.md`, and `service-dirs.json`.
 
 2. Decompose the plan into atomic work tasks. Each task must:
    - Be independently implementable
