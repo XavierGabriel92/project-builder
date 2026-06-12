@@ -30,7 +30,8 @@ export function createWorkflowState(
   featurePath: string,
   projectRoot: string,
   serviceDirs?: string[],
-  featureContext?: string
+  featureContext?: string,
+  projectRulesContext?: string
 ): WorkflowState {
   const steps: WorkflowStep[] = flow.steps.map((step, index) => ({
     index,
@@ -54,6 +55,7 @@ export function createWorkflowState(
     steps,
     service_dirs: serviceDirs,
     feature_context: featureContext,
+    project_rules_context: projectRulesContext,
     build_status: null,
   };
 }

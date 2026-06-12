@@ -13,10 +13,12 @@ import type { FlowDefinition } from "../../src/shared/types.ts";
 import { start, step, stepUpdate, stepComplete, recordGate, status, list } from "../../src/engine/engine.ts";
 
 // Test flow with retries and approval
+// strictOutputs: false — tests submit success without writing the declared output files
 const testFlow: FlowDefinition = {
   id: "test-flow",
   version: 1,
   description: "Test flow",
+  strictOutputs: false,
   steps: [
     { agent: "gather-input", requestApproval: true },
     { agent: "implement", attempts: 2 },

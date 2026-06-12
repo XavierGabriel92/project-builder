@@ -51,6 +51,7 @@ import {
   validateFlowApproval,
   buildGate,
 } from "./agent-loader.ts";
+import { discoverProjectRules } from "./project-rules.ts";
 
 // ============================================================================
 // Agent cache (avoids re-reading .md files on every step/complete call)
@@ -83,10 +84,25 @@ function getCachedAgent(agentsDir: string, agentId: string, isSubagent = false):
 // Prompt Prefix / Suffix (injected by the engine, not written in agent .md files)
 // ============================================================================
 
-function workspacePrefix(featurePath: string, featureContext?: string): string {
+function workspacePrefix(
+  featurePath: string,
+  featureContext?: string,
+  projectRulesContext?: string
+): string {
   let prefix = "## Workspace\n\n" +
-    `Write all output files to .temp/${featurePath}/. ` +
+    `ALL output file paths in \`write\` tool calls MUST start with \`.temp/${featurePath}/\`. ` +
+    `Always write \`.temp/${featurePath}/plan.md\`, NOT \`plan.md\`. ` +
     "Read inputs from the same directory.\n";
+
+  // Project rules (auto-discovered) — injected before feature context
+  // since rules apply to all steps and features
+  if (projectRulesContext) {
+    prefix +=
+      "\n## Project Rules\n\n" +
+      "The following rules, conventions, and architectural constraints were " +
+      "discovered from the project. Follow them for every change you make.\n\n" +
+      `${projectRulesContext}\n`;
+  }
 
   if (featureContext) {
     prefix +=
@@ -134,8 +150,9 @@ const SUBAGENT_COMPLETION_SUFFIX =
   "Do not ask questions or offer to continue.";
 
 const SUPPRESS_SUBAGENT_PROGRESS =
-  "\n\n## Subagent Behavior — File Output Constraints\n\n" +
-  "Subagents must NOT write files to disk. Their results must be returned inline in the response.\n\n" +
+  "\n\n## Subagent Behavior — Output & Progress Configuration\n\n" +
+  "These constraints apply to the `subagent` tool's `output` and `progress` parameters ONLY. " +
+  "Worker subagents themselves use `write`/`edit` to modify project source files normally.\n\n" +
   "### When using the `tasks` array (parallel dispatch):\n" +
   "- Do NOT set `output` on any task object — omit it entirely\n" +
   "- Do NOT set `progress: true` on any task object — the engine defaults to `false`; do not override\n\n" +
@@ -143,7 +160,9 @@ const SUPPRESS_SUBAGENT_PROGRESS =
   "- Do NOT set the top-level `output` parameter\n" +
   "- Do NOT set `includeProgress: true`\n\n" +
   "### Rationale\n" +
-  "Workflow artifacts live under .temp/. Subagent output files and progress.md clutter the workspace and are never consumed by downstream steps.";
+  "Your own output files (like implementation-notes.md) belong under .temp/. " +
+  "Subagent output files and progress.md clutter the workspace and are never consumed by downstream steps. " +
+  "Worker subagents return results inline in the response.";
 
 // ============================================================================
 // validateFlows
@@ -202,8 +221,14 @@ export function start(
   // Validate that requestApproval steps have approval blocks
   validateFlowApproval(agentsDir, flow);
 
+  // Auto-discover project rules (AGENTS.md, docs/, README.md)
+  const projectRulesContext = discoverProjectRules(projectRoot);
+
   const featurePath = resolveFeaturePath(featureName, projectRoot);
-  const state = createWorkflowState(flow, featureName, featurePath, projectRoot, serviceDirs, featureContext);
+  const state = createWorkflowState(
+    flow, featureName, featurePath, projectRoot,
+    serviceDirs, featureContext, projectRulesContext
+  );
 
   writeWorkflow(projectRoot, featurePath, state);
 
@@ -252,6 +277,7 @@ export function step(
   // Load agent manifest (cached)
   const loaded = getCachedAgent(agentsDir, flowStep.agent);
   const featureContext = resolved.state.feature_context;
+  const projectRulesContext = resolved.state.project_rules_context;
   const subagentInstructions = loaded.manifest.subagents
     ? Object.fromEntries(
         Object.entries(loaded.manifest.subagents).map(([name, relativePath]) => {
@@ -262,7 +288,7 @@ export function step(
               path: relativePath,
               tools: subagent.manifest.tools,
               prompt:
-                workspacePrefix(resolved.featurePath, featureContext) +
+                workspacePrefix(resolved.featurePath, featureContext, projectRulesContext) +
                 "\n\n" +
                 subagent.prompt +
                 SUBAGENT_COMPLETION_SUFFIX,
@@ -283,7 +309,7 @@ export function step(
     subagentInstructions,
     parallel: loaded.manifest.parallel,
     prompt:
-      workspacePrefix(resolved.featurePath, featureContext) +
+      workspacePrefix(resolved.featurePath, featureContext, projectRulesContext) +
       "\n\n" +
       loaded.prompt +
       (loaded.manifest.subagents ? SUPPRESS_SUBAGENT_PROGRESS : "") +

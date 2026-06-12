@@ -25,7 +25,11 @@ Before you call `flow_step_complete`, ALL of the following files MUST exist with
 
 **If ANY of the 6 items above is missing, you have NOT finished your job. Do NOT call `flow_step_complete` until ALL 6 are verified.**
 
-Phases 5 and 6 are NOT optional — they are how the project remembers what was built and why. Skipping them means the feature has no discoverable documentation. The workspace prefix constraint that limits writes to `.temp/` does NOT apply to Phase 5 and Phase 6 files. These files must be written to absolute paths under the project root.
+Phases 5 and 6 are NOT optional — they are how the project remembers what was built and why. Skipping them means the feature has no discoverable documentation.
+
+**Important distinction about output paths:**
+- `summary.md` and `state.md` (Phases 2-3) go to `.temp/{feature_path}/` — follow the workspace prefix.
+- Reference docs (Phases 5-6) go to `{project_root}/{service_dir}/references/features/{feature_path}/` — use absolute paths under the project root. These are permanent project documentation, not workflow artifacts.
 
 ## Instructions
 
@@ -174,11 +178,9 @@ Phases 5 and 6 are NOT optional — they are how the project remembers what was 
 
 **🚨🚨🚨 THIS PHASE WRITES TO THE PROJECT TREE — DO NOT WRITE THESE FILES TO `.temp/` 🚨🚨🚨**
 
-The workspace prefix at the top of this prompt tells you to write outputs to `.temp/{feature_path}/` — **YOU MUST IGNORE THAT CONSTRAINT FOR THIS PHASE AND PHASE 6.**
+Phase 5 and Phase 6 create PERMANENT project documentation. These files go to a DIFFERENT location than the workflow artifacts (which belong under `.temp/`).
 
-The workspace prefix applies ONLY to `summary.md` and `state.md` (Phases 2-3).
-
-Phase 5 and Phase 6 files are PERMANENT project documentation. They MUST be written to absolute paths under the project root:
+Use absolute paths under the project root for these files:
 
 ```
 {project_root}/{service_dir}/references/features/{feature_path}/

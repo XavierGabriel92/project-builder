@@ -8,7 +8,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Editor, type Focusable, matchesKey, Text } from "@earendil-works/pi-tui";
+import { CombinedAutocompleteProvider, Container, Editor, type Focusable, matchesKey, Text } from "@earendil-works/pi-tui";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import type { EngineContext } from "./engine-context.ts";
 import { allFlows } from "../../flows/index.ts";
@@ -102,6 +102,9 @@ function buildEditorTheme(theme: Theme): EditorTheme {
  * A simple multi-line text input dialog using the Editor component.
  * Shows a title, the editor with word wrapping, and help text.
  * Submit with Enter, cancel with Escape, new line with Shift+Enter.
+ *
+ * Supports @ file references via CombinedAutocompleteProvider (fuzzy file
+ * search scoped to the project root).
  */
 class FeatureContextDialog extends Container implements Focusable {
   private editor: Editor;
@@ -125,6 +128,7 @@ class FeatureContextDialog extends Container implements Focusable {
     piTheme: Theme,
     title: string,
     onDone: (value: string | undefined) => void,
+    projectRoot: string,
   ) {
     super();
     this.tui = tui;
@@ -147,6 +151,10 @@ class FeatureContextDialog extends Container implements Focusable {
       const trimmed = value.trim();
       onDone(trimmed || undefined);
     };
+    // Enable @ file-reference autocomplete (fuzzy file search scoped to project root)
+    this.editor.setAutocompleteProvider(
+      new CombinedAutocompleteProvider([], projectRoot),
+    );
     this.addChild(this.editor);
 
     // Help text
@@ -183,9 +191,10 @@ class FeatureContextDialog extends Container implements Focusable {
 async function multilineInput(
   ctx: ExtensionCommandContext,
   title: string,
+  projectRoot: string,
 ): Promise<string | undefined> {
   return ctx.ui.custom<string | undefined>((tui, piTheme, _kb, done) => {
-    const dialog = new FeatureContextDialog(tui, piTheme, title, done);
+    const dialog = new FeatureContextDialog(tui, piTheme, title, done, projectRoot);
     return {
       render: (width: number) => dialog.render(width),
       invalidate: () => dialog.invalidate(),
@@ -229,6 +238,7 @@ async function startNewWorkflow(
   const featureContext = await multilineInput(
     ctx,
     "What do you want to build? (optional)",
+    projectRoot,
   );
   // undefined means user cancelled the dialog (pressed Escape with empty text)
   // empty string means user submitted with no text — treat as no context

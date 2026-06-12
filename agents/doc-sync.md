@@ -32,7 +32,9 @@ You are the **doc-sync** agent. Your job is to synchronize project documentation
 
 ### Phase 4: Write Sync Report
 
-7. Write `docs.md`: a complete audit log of every documentation file you checked and what you did (or didn't) change:
+7. Write `docs.md` to `.temp/{feature_path}/docs.md` (follow the workspace prefix — this is a workflow artifact): a complete audit log of every documentation file you checked and what you did (or didn't) change:
+
+**Note:** `docs.md` goes to `.temp/{feature_path}/`, NOT to `references/`. Only the reference docs you create in Phase 3 go under `references/` in the project tree.
 
 ```markdown
 # Documentation Sync

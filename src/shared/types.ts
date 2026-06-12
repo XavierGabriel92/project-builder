@@ -217,6 +217,8 @@ export interface WorkflowState {
   service_dirs?: string[];
   /** Free-form user description of the feature (collected at workflow start). Injected into every agent prompt. */
   feature_context?: string;
+  /** Auto-discovered project rules from AGENTS.md, docs/, README.md. Injected into every agent prompt. */
+  project_rules_context?: string;
   build_status?: "DONE" | "BLOCKED" | null;
 }
 

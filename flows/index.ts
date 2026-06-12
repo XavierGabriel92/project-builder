@@ -27,6 +27,7 @@ export const FEATURE_BUILD_FLOW: FlowDefinition = {
     { agent: "plan" },
     { agent: "implement", attempts: 2 },
     { agent: "review", requestApproval: true },
+    { agent: "lint" },
     { agent: "doc-sync" },
     { agent: "complete" },
   ],
