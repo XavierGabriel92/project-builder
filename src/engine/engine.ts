@@ -90,8 +90,9 @@ function workspacePrefix(
   projectRulesContext?: string
 ): string {
   let prefix = "## Workspace\n\n" +
-    "ALL output file paths in write tool calls MUST start with .temp/" + featurePath + "/. " +
-    "Always write .temp/" + featurePath + "/plan.md, NOT plan.md.\n";
+    "Your declared output files MUST be written to .temp/" + featurePath + "/. " +
+    "Always write .temp/" + featurePath + "/plan.md, NOT plan.md. " +
+    "If the instructions below explicitly tell you to write files directly to the project tree, follow those instructions.\n";
 
   // Project rules (auto-discovered) — injected before feature context
   // since rules apply to all steps and features

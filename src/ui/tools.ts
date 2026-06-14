@@ -71,7 +71,8 @@ function truncate(value: string, max = 60): string {
 export function registerTools(
   pi: ExtensionAPI,
   engine: EngineContext,
-  onStateChange?: (projectRoot: string) => void
+  onStateChange?: (sessionId: string) => void,
+  registerWidget?: (ctx: ExtensionContext) => void
 ): void {
   // ---------------------------------------------------------------------------
   // Tool: flow_start
@@ -157,7 +158,9 @@ export function registerTools(
           (s, i) => `${i === state.current_step_index ? ">" : " "} Step ${i + 1}: ${s.agent} [${s.status}]`
         ).join("\n");
         // Notify the widget (if registered) to refresh
-        onStateChange?.(projectRoot);
+        onStateChange?.(_ctx.sessionManager.getSessionId());
+        // Register the widget for this session on first workflow start
+        registerWidget?.(_ctx);
 
         return textResult(
           `✅ Workflow "${state.feature}" started.\n\n${stepInfo}`,
@@ -222,7 +225,7 @@ export function registerTools(
         }
 
         // Notify the widget that a new step has started
-        onStateChange?.(projectRoot);
+        onStateChange?.(_ctx.sessionManager.getSessionId());
 
         return textResult(
           `Step ${instruction.stepIndex + 1} (${instruction.agent}) loaded. ` +
@@ -333,7 +336,7 @@ export function registerTools(
       const childRuns = listCorrelatedSubagentRuns(outcome.state, 6);
 
       // Notify the widget to refresh with updated step activity
-      onStateChange?.(projectRoot);
+      onStateChange?.(_ctx.sessionManager.getSessionId());
 
       if (isRunningWorkflow(outcome.state)) {
         const status = outcome.state.steps[outcome.state.current_step_index];
@@ -437,7 +440,7 @@ export function registerTools(
         }
 
         // Notify the widget to refresh after step completion
-        onStateChange?.(projectRoot);
+        onStateChange?.(_ctx.sessionManager.getSessionId());
 
         // Helper to append warnings if present
         function withWarnings(lines: string[], warnings: string[] | undefined): string[] {
@@ -604,7 +607,7 @@ export function registerTools(
         }
 
         // Notify the widget to refresh after gate answer
-        onStateChange?.(projectRoot);
+        onStateChange?.(_ctx.sessionManager.getSessionId());
 
         // Show status for in_progress (advance or retry)
         if (isRunningWorkflow(outcome.state)) {
@@ -936,7 +939,7 @@ export function registerTools(
       }
 
       // Notify the widget to clear the step summary
-      onStateChange?.(projectRoot);
+      onStateChange?.(_ctx.sessionManager.getSessionId());
 
       return textResult(`Workflow "${result.feature}" (${result.feature_path}) marked as abandoned.`, {
         featurePath: result.feature_path,

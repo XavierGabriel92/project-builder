@@ -9,7 +9,7 @@
  * LLM is executing.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createEngineContext, resolveAgentsDir } from "./engine-context.ts";
 import { registerTools } from "./tools.ts";
 import { registerCommands } from "./commands.ts";
@@ -19,36 +19,41 @@ export default function (pi: ExtensionAPI) {
   const agentsDir = resolveAgentsDir(process.cwd());
   const engine = createEngineContext(agentsDir);
 
-  // Per-projectRoot widget instances so state is scoped to the active session.
-  // Tools pass projectRoot → we look up the correct widget and notify it.
-  const widgetsByProjectRoot = new Map<string, StepSummaryWidget>();
+  // Per-session widget instances so state is fully scoped to the session
+  // that initiated the workflow. No leakage across sessions in the same project root.
+  const widgetsBySessionId = new Map<string, StepSummaryWidget>();
 
-  // Register all flow_* tools (pass onStateChange callback so tools trigger widget refresh)
-  registerTools(pi, engine, (projectRoot: string) => {
-    widgetsByProjectRoot.get(projectRoot)?.notifyChange();
-  });
-
-  // Register slash commands
-  registerCommands(pi, engine);
-
-  // Register the step-summary widget above the editor on session start.
-  // The widget is created per-session so it is scoped to the session's
-  // project root and does not leak workflow state across sessions.
-  pi.on("session_start", (_event, ctx) => {
+  /** Register the step-summary widget for the current session. Idempotent. */
+  function registerWidget(projectRoot: string, ctx: ExtensionContext): void {
     if (!ctx.hasUI) return;
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (widgetsBySessionId.has(sessionId)) return;
 
-    const projectRoot = ctx.cwd ?? process.cwd();
     const widget = new StepSummaryWidget(engine, projectRoot);
-    widgetsByProjectRoot.set(projectRoot, widget);
+    widgetsBySessionId.set(sessionId, widget);
 
     ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
-      // Wire the requestRender callback to the TUI
       widget.setRequestRender(() => _tui.requestRender());
       return {
         render: (width: number) => widget.render(width, theme),
         invalidate: () => widget.invalidate(),
       };
     });
+  }
+
+  // Register all flow_* tools (pass onStateChange + registerWidget callbacks)
+  registerTools(pi, engine,
+    (sessionId: string) => {
+      widgetsBySessionId.get(sessionId)?.notifyChange();
+    },
+    (ctx: ExtensionContext) => {
+      registerWidget(ctx.cwd, ctx);
+    }
+  );
+
+  // Register slash commands (pass registerWidget for start/resume paths)
+  registerCommands(pi, engine, (ctx) => {
+    registerWidget(ctx.cwd, ctx);
   });
 
 }

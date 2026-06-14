@@ -13,7 +13,7 @@ import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
 import type { EngineContext } from "./engine-context.ts";
 import { allFlows } from "../../flows/index.ts";
 
-export function registerCommands(pi: ExtensionAPI, engine: EngineContext): void {
+export function registerCommands(pi: ExtensionAPI, engine: EngineContext, registerWidget: (ctx: ExtensionCommandContext) => void): void {
   pi.registerCommand("project-builder", {
     description: "Start or resume a project-builder workflow",
     handler: async (_args, ctx) => {
@@ -65,6 +65,7 @@ export function registerCommands(pi: ExtensionAPI, engine: EngineContext): void 
       }
 
       if (isResume) {
+        registerWidget(ctx);
         const state = engine.status(projectRoot, featurePath)!;
         const currentStepInfo = state.steps[state.current_step_index];
         const stepLabel = currentStepInfo
@@ -76,6 +77,7 @@ export function registerCommands(pi: ExtensionAPI, engine: EngineContext): void 
           `Please continue the workflow "${state.feature}" by calling \`flow_continue\` for feature path "${featurePath}".`;
         sendUserMessage(pi, ctx, message);
       } else {
+        registerWidget(ctx);
         const state = engine.status(projectRoot, featurePath)!;
         ctx.ui.notify(`Workflow "${state.feature}" started.`, "info");
 
