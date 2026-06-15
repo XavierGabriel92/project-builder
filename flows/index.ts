@@ -15,8 +15,9 @@ import type { FlowDefinition } from "../src/shared/types.ts";
  * analyze merges: gather-input + discover into a single step with one output file.
  * spec-write merges: research findings into spec.md (no separate research.md).
  * implement uses task-based worker fan-out.
- * doc-sync uses classify + writer subagents.
- * complete uses reference-writer + verifier + artifact-writer subagents.
+ * doc-sync directly audits and updates existing reference docs.
+ * complete writes all 6 outputs to .temp/ (engine-validated) then copies
+ *   feature-summary.md, learnings.md, maintenance.md to the project tree.
  */
 export const FEATURE_BUILD_FLOW: FlowDefinition = {
   id: "feature-build",
