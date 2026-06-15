@@ -15,9 +15,9 @@ import type { FlowDefinition } from "../src/shared/types.ts";
  * analyze merges: gather-input + discover into a single step with one output file.
  * spec-write merges: research findings into spec.md (no separate research.md).
  * implement uses task-based worker fan-out.
- * doc-sync directly audits and updates existing reference docs.
- * complete writes all 6 outputs to .temp/ (engine-validated) then copies
- *   feature-summary.md, learnings.md, maintenance.md to the project tree.
+ * doc-sync audits existing reference docs and writes audit report.
+ * complete writes all 6 output files to .temp/ (engine-validated).
+ * persist-docs copies the 3 reference docs to the project tree and updates README.
  */
 export const FEATURE_BUILD_FLOW: FlowDefinition = {
   id: "feature-build",
@@ -32,6 +32,7 @@ export const FEATURE_BUILD_FLOW: FlowDefinition = {
     { agent: "lint" },
     { agent: "doc-sync", attempts: 2 },
     { agent: "complete" },
+    { agent: "persist-docs" },
   ],
 };
 
@@ -54,6 +55,7 @@ export const BUG_FIX_FLOW: FlowDefinition = {
     { agent: "fix", attempts: 2 },
     { agent: "verify", requestApproval: true },
     { agent: "complete" },
+    { agent: "persist-docs" },
   ],
 };
 
@@ -79,6 +81,7 @@ export const SMALL_FEATURE_FLOW: FlowDefinition = {
     { agent: "review", requestApproval: true },
     { agent: "lint" },
     { agent: "complete" },
+    { agent: "persist-docs" },
   ],
 };
 
