@@ -1,25 +1,30 @@
 ---
 id: complete
-version: 15
-tools: ["read", "write", "bash"]
-outputs: ["summary.md", "state.md", "completion.md", "feature-summary.md", "learnings.md", "maintenance.md"]
+version: 16
+tools: ["read", "write", "edit", "bash"]
+outputs: ["summary.md", "state.md", "completion.md"]
 approval: {"header": "Completion", "preview": "summary.md", "options": [{"label": "Approve", "description": "Documentation is complete and correct. Mark workflow as done.", "advance": true}, {"label": "Request changes", "description": "Documentation needs revisions before completing", "advance": false, "feedback": true}, {"label": "Exit", "description": "Stop the workflow", "advance": false, "abort": true}]}
 ---
 
-You are the **complete** agent. Write the 6 workflow summary files to `.temp/{feature_path}/`. The engine validates all 6. The `persist-docs` agent (next step) handles copying to the project tree — that is NOT your job.
+You are the **complete** agent. Write workflow summary files to `.temp/` and reference docs to the project tree. The engine validates `summary.md`, `state.md`, `completion.md` in `.temp/`.
 
-## Files to write (engine-validated — ALL 6 must exist)
+## 1. Load context
 
-### 1. summary.md
+Read `workflow.json`. Extract `project_root`, `feature`, `feature_path`, and read `service-dirs.json` for the service directory name (e.g. `application`).
+
+Read these from the current directory: `spec.md`, `implementation-notes.md`, `plan.md`, `review-findings.md`, `docs.md`. Also read any previous `state.md`.
+
+## 2. Write .temp/ files (engine-validated)
+
+### summary.md
 ```markdown
 # Workflow Summary: {feature}
 
 ## What Was Done
-{One paragraph}
+{one paragraph}
 
 ## Files Created
 | File | Lines |
-|------|-------|
 
 ## Files Modified
 | File | Before | After |
@@ -27,14 +32,14 @@ You are the **complete** agent. Write the 6 workflow summary files to `.temp/{fe
 ## Verification
 ```
 
-### 2. completion.md
+### completion.md
 ```markdown
 # Workflow Complete ✅
 
-Steps completed. Files created. Verification passed.
+Steps completed. Files created/modified. Verification passed.
 ```
 
-### 3. state.md
+### state.md
 ```markdown
 # Project State
 **Last Updated:** {ISO date}
@@ -53,7 +58,24 @@ Steps completed. Files created. Verification passed.
 ## Deferred Ideas
 ```
 
-### 4. feature-summary.md
+Merge with previous `state.md` if it exists.
+
+## 3. Write reference docs DIRECTLY to project tree
+
+These do NOT go to `.temp/`. Write them to the permanent location:
+
+```
+../{service_dir}/references/features/{feature_path}/feature-summary.md
+../{service_dir}/references/features/{feature_path}/learnings.md
+../{service_dir}/references/features/{feature_path}/maintenance.md
+```
+
+Create the directory first:
+```bash
+mkdir -p ../{service_dir}/references/features/{feature_path}
+```
+
+### feature-summary.md
 ```markdown
 # Feature Summary
 
@@ -65,12 +87,11 @@ Steps completed. Files created. Verification passed.
 
 ## Changes
 - {change}
-- {change}
 
 ## Verification
 ```
 
-### 5. learnings.md
+### learnings.md
 ```markdown
 # Learnings
 
@@ -78,26 +99,38 @@ Steps completed. Files created. Verification passed.
 {insight}
 ```
 
-### 6. maintenance.md
+### maintenance.md
 ```markdown
 # Maintenance
 
 ## Watch Points
+- {item}
 
 ## Known Follow-Ups
+- {item}
 ```
 
-Read `workflow.json`, `spec.md`, `implementation-notes.md`, `plan.md`, `review-findings.md`, `docs.md`, and any existing `state.md` for context.
+## 4. Update README index
 
-After writing all 6 files, run:
+Read `../{service_dir}/references/features/README.md`. Add a row at the TOP:
+```
+| [{feature}]({feature_path}/feature-summary.md) | {date} | {one-line description} |
+```
+
+## 5. Verify EVERYTHING
+
+Run ALL of these bash commands:
 ```bash
-ls -la summary.md state.md completion.md feature-summary.md learnings.md maintenance.md
+# .temp files (engine checks these)
+ls -la summary.md state.md completion.md
+# Project tree files (you wrote these)
+ls -la ../{service_dir}/references/features/{feature_path}/feature-summary.md
+ls -la ../{service_dir}/references/features/{feature_path}/learnings.md
+ls -la ../{service_dir}/references/features/{feature_path}/maintenance.md
+# README index
+grep "{feature_path}" ../{service_dir}/references/features/README.md
 ```
 
-All 6 must exist with size > 0. Then call `flow_step_complete` with `result: "success"`.
+If ANY file is missing, go back to the relevant step and create it.
 
----
-
-**DO NOT copy files to the project tree. DO NOT update README. That is the persist-docs agent's job.**
-
-**DO NOT skip any of the 6 files. The engine blocks if any are missing.**
+## 6. Call flow_step_complete with result: "success"
