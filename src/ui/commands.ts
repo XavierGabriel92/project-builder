@@ -53,13 +53,14 @@ export function registerCommands(pi: ExtensionAPI, engine: EngineContext, regist
         if (chosenIndex !== startNewIndex) {
           featurePath = activeRuns[chosenIndex].fp;
           isResume = true;
+          pi.setSessionName(activeRuns[chosenIndex].state.feature);
         } else {
-          const result = await startNewWorkflow(ctx, engine, projectRoot);
+          const result = await startNewWorkflow(pi, ctx, engine, projectRoot);
           if (!result) return;
           featurePath = result;
         }
       } else {
-        const result = await startNewWorkflow(ctx, engine, projectRoot);
+        const result = await startNewWorkflow(pi, ctx, engine, projectRoot);
         if (!result) return;
         featurePath = result;
       }
@@ -210,6 +211,7 @@ async function multilineInput(
 // ============================================================================
 
 async function startNewWorkflow(
+  pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   engine: EngineContext,
   projectRoot: string
@@ -261,6 +263,7 @@ async function startNewWorkflow(
   try {
     const context = featureContext.trim() || undefined;
     const result = engine.start(flow, featureName.trim(), projectRoot, { featureContext: context });
+    pi.setSessionName(featureName.trim());
     return result.featurePath;
   } catch (err) {
     ctx.ui.notify(`Error starting flow: ${(err as Error).message}`, "error");

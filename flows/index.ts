@@ -74,6 +74,7 @@ export const SMALL_FEATURE_FLOW: FlowDefinition = {
     { agent: "spec-write" },
     { agent: "implement", attempts: 2 },
     { agent: "review", requestApproval: true },
+    { agent: "lint" },
     { agent: "complete" },
   ],
 };

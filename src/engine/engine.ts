@@ -162,11 +162,24 @@ const APPROVAL_INSTRUCTION =
   "\n\n## Approval Gate\n\n" +
   "After you submit `flow_step_complete` with `result: \"success\"`, this step will " +
   "pause for user approval before the workflow advances. " +
-  "When the approval gate appears, you MUST use `ask_user_question` to present " +
-  "the gate options to the user. " +
-  "Do NOT call `flow_record_gate` directly without the user's explicit choice. " +
-  "Only after the user picks an option should you call `flow_record_gate` " +
-  "with their answer.\n\n" +
+  "You MUST follow this exact protocol:\n\n" +
+  "### Protocol\n\n" +
+  "1. Call `flow_continue` to see the full gate details.\n" +
+  "2. Use `ask_user_question` to present the gate options to the user.\n" +
+  "3. **After the user answers, IMMEDIATELY call `flow_record_gate`.**\n" +
+  "   - Do NOT read files, write files, make edits, or do any other work.\n" +
+  "   - Do NOT refine your output based on the user's feedback.\n" +
+  "   - The user's answer IS the decision — record it NOW.\n" +
+  "4. Use the **EXACT option label** from the gate options — do NOT add " +
+  "any suffix like \"(Recommended)\" to the label.\n" +
+  "5. If the user chose a \"Request changes\" / \"Refine\" option, " +
+  "include their feedback as the `feedback` argument. " +
+  "The workflow will retry the step with the feedback.\n\n" +
+  "### Never\n\n" +
+  "- Do NOT do any work between the `ask_user_question` answer and `flow_record_gate`.\n" +
+  "- Do NOT add \"(Recommended)\" or any suffix to gate option labels.\n" +
+  "- Do NOT call `flow_record_gate` without the user's explicit choice " +
+  "(unless they gave a standing instruction to auto-approve).\n\n" +
   "If the user has given you general instructions to proceed without asking " +
   "(e.g., \"do not ask questions, keep going\"), you may auto-answer the gate. " +
   "Otherwise, always ask first.";

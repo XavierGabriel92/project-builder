@@ -227,9 +227,18 @@ export function registerTools(
         // Notify the widget that a new step has started
         onStateChange?.(_ctx.sessionManager.getSessionId());
 
+        const promptPreview = instruction.prompt
+          ? instruction.prompt.slice(0, 600) + (instruction.prompt.length > 600 ? "..." : "")
+          : "";
+
         return textResult(
-          `Step ${instruction.stepIndex + 1} (${instruction.agent}) loaded. ` +
-          `Attempt ${instruction.attempt}/${instruction.maxAttempts}.`,
+          `## Step ${instruction.stepIndex + 1}: ${instruction.agent} (attempt ${instruction.attempt}/${instruction.maxAttempts})\n\n` +
+          `You ARE the **${instruction.agent}** agent. Read the full instructions from the \`details.prompt\` field below. ` +
+          `Execute the step using only the tools listed in \`details.tools\`. Do NOT search for subagents or external agents to do this work — you are the ${instruction.agent} agent yourself.\n\n` +
+          `### Prompt preview:\n> ${promptPreview.split('\n').join('\n> ')}\n\n` +
+          `### Expected outputs: ${(instruction.expectedOutputs ?? []).join(', ') || 'none'}\n` +
+          `### Allowed tools: ${instruction.tools.join(', ')}\n` +
+          `${instruction.requestApproval ? '### ⛔ This step requires USER APPROVAL after completion\n' : ''}`,
           {
             agent: instruction.agent,
             stepIndex: instruction.stepIndex,
@@ -784,7 +793,7 @@ export function registerTools(
     description:
       "Detect the active workflow's state and perform the obvious next action automatically. If the workflow is in_progress, loads the current step instructions (same as flow_step). If awaiting a gate, returns the gate details formatted for presentation. If done or blocked, returns the final status.",
     promptSnippet:
-      "Continue the active workflow automatically — step if runnable, present gate if awaiting approval, or report final status",
+      "Continue the active workflow automatically — step if runnable, present gate if awaiting approval, or report final status. Read the full step instructions from the details.prompt field — you ARE the agent.",
     parameters: Type.Object({
       featurePath: Type.Optional(Type.String({ description: "Feature path (looks up active workflow if omitted)" })),
       agentsDir: Type.Optional(Type.String()),
@@ -871,9 +880,18 @@ export function registerTools(
         );
       }
 
+      const promptPreview = instruction.prompt
+        ? instruction.prompt.slice(0, 600) + (instruction.prompt.length > 600 ? "..." : "")
+        : "";
+
       return textResult(
-        `Step ${instruction.stepIndex + 1} (${instruction.agent}) loaded — ` +
-        `attempt ${instruction.attempt}/${instruction.maxAttempts}`,
+        `## Step ${instruction.stepIndex + 1}: ${instruction.agent} (attempt ${instruction.attempt}/${instruction.maxAttempts})\n\n` +
+        `You ARE the **${instruction.agent}** agent. Read the full instructions from the \`details.prompt\` field below. ` +
+        `Execute the step using only the tools listed in \`details.tools\`. Do NOT search for subagents or external agents to do this work — you are the ${instruction.agent} agent yourself.\n\n` +
+        `### Prompt preview:\n> ${promptPreview.split('\n').join('\n> ')}\n\n` +
+        `### Expected outputs: ${(instruction.expectedOutputs ?? []).join(', ') || 'none'}\n` +
+        `### Allowed tools: ${instruction.tools.join(', ')}\n` +
+        `${instruction.requestApproval ? '### ⛔ This step requires USER APPROVAL after completion\n' : ''}`,
         {
           action: "advance",
           agent: instruction.agent,

@@ -1,54 +1,111 @@
 ---
 id: complete
-version: 10
+version: 12
 tools: ["read", "write", "bash"]
 outputs: ["summary.md", "state.md", "completion.md"]
 approval: {"header": "Completion", "preview": "state.md", "options": [{"label": "Approve", "description": "Documentation is complete and correct. Mark workflow as done.", "advance": true}, {"label": "Request changes", "description": "Documentation needs revisions before completing", "advance": false, "feedback": true}, {"label": "Exit", "description": "Stop the workflow", "advance": false, "abort": true}]}
 ---
 
-You are the **complete** agent. Your job is to produce the final workflow summary, persist reference documentation, and update the project state.
+You are the **complete** agent. Your PRIMARY job is to write reference documentation into the project tree. The 3 `.temp/` output files are secondary.
 
-## Declared outputs (engine-validated)
+There are two sets of files you must produce:
+1. **Project tree files** — `feature-summary.md`, `learnings.md`, `maintenance.md` — written to `{project_root}/{service_dir}/references/features/{feature_path}/` for each service directory. These are the MAIN deliverable.
+2. **.temp files** — `summary.md`, `state.md`, `completion.md` — written to `.temp/{feature_path}/`. These are secondary artifacts.
 
-| # | File | Location |
-|---|------|----------|
-| 1 | `summary.md` | `.temp/{feature_path}/` |
-| 2 | `state.md` | `.temp/{feature_path}/` |
-| 3 | `completion.md` | `.temp/{feature_path}/` |
+**CRITICAL: Both sets MUST be written. If you only write the .temp files and skip the project tree, you have FAILED.**
 
-The engine validates these 3 exist before allowing `flow_step_complete`.
+## Phase A — Resolve service directories
 
-## Reference docs (written directly to project tree)
+Before writing anything, figure out which service directories were touched by this feature.
 
-| File | Destination |
-|------|-------------|
-| `feature-summary.md` | `{project_root}/{service_dir}/references/features/{feature_path}/` |
-| `learnings.md` | `{project_root}/{service_dir}/references/features/{feature_path}/` |
-| `maintenance.md` | `{project_root}/{service_dir}/references/features/{feature_path}/` |
+Read `workflow.json` and `service-dirs.json` from `.temp/{feature_path}/`.
 
-These are NOT written to `.temp/` — they go directly to the project tree. **If you skip Phase 5, the feature docs are missing permanently.**
+Resolve the list of service directory **top-level names** (e.g. `application`, `api`). Try in order:
+- `workflow.json.service_dirs` → extract first segment of each path
+- `service-dirs.json` → extract first segment of each path (resilient parsing)
+- If still empty, fall back to `["."]`
 
----
+Store this list. You will need it for Phase B and for verification.
 
-## Instructions
+## Phase B — Write project tree reference docs (DO THIS FIRST)
 
-### Phase 1: Load Context
+Read all available workflow artifacts from `.temp/{feature_path}/` to understand what was built:
+`analysis.md`, `spec.md`, `plan.md`, `implementation-notes.md`, `review-findings.md`, `docs.md`.
 
-1. Read `workflow.json` and all available workflow artifacts:
-   - `analysis.md`
-   - `spec.md`
-   - `plan.md`
-   - `service-dirs.json`
-   - `implementation-notes.md`
-   - `review-findings.md`
-   - `docs.md`
+Then for **each** service directory from Phase A, execute ALL of the following. Do NOT skip any step.
 
-2. If a previous `state.md` exists, load it for continuity.
+### B1. Create the directory
+```bash
+mkdir -p {project_root}/{service_dir}/references/features/{feature_path}
+```
 
-### Phase 2: Write Summary & Completion
+### B2. Write `feature-summary.md`
+Write to `{project_root}/{service_dir}/references/features/{feature_path}/feature-summary.md`:
 
-3. Write `summary.md` to `.temp/{feature_path}/`:
+```markdown
+# Feature Summary
 
+> **Breaking Changes:** Yes/No
+> **API Changes:** Description of any API contract changes
+
+## Feature
+{One-line description}
+
+## Changes
+- {key change 1}
+- {key change 2}
+
+## Verification
+{How the feature was verified}
+```
+
+### B3. Write `learnings.md`
+Write to `{project_root}/{service_dir}/references/features/{feature_path}/learnings.md`:
+
+```markdown
+# Learnings
+
+## {Topic}
+{Lesson/insight}
+```
+
+### B4. Write `maintenance.md`
+Write to `{project_root}/{service_dir}/references/features/{feature_path}/maintenance.md`:
+
+```markdown
+# Maintenance
+
+## Watch Points
+- {fragile area or edge case}
+
+## Known Follow-Ups
+- {deferred work}
+```
+
+### B5. Update the README index
+Read `{project_root}/{service_dir}/references/features/README.md`.
+
+If it exists, insert a new row at the top of the table (most recent first):
+```markdown
+| [{feature-slug}]({feature_path}/feature-summary.md) | {date} | {one-line description} |
+```
+
+If it does NOT exist, create it:
+```markdown
+# Features
+
+This directory contains records of feature builds executed by the project-builder pipeline on this service.
+
+| Feature | Date | Description |
+|---------|------|-------------|
+| [{feature-slug}]({feature_path}/feature-summary.md) | {date} | {one-line description} |
+```
+
+## Phase C — Write .temp artifacts
+
+Now write these 3 files to `.temp/{feature_path}/`:
+
+### C1. `summary.md`
 ```markdown
 # Summary: {feature}
 
@@ -65,8 +122,7 @@ These are NOT written to `.temp/` — they go directly to the project tree. **If
 ## Follow-Up Items
 ```
 
-4. Write `completion.md` to `.temp/{feature_path}/` — a comprehensive record of files created, files modified, design decisions, and verification results. Synthesize from implementation-notes.md, review-findings.md, and your own observations:
-
+### C2. `completion.md`
 ```markdown
 # Completion: {feature}
 
@@ -88,10 +144,7 @@ These are NOT written to `.temp/` — they go directly to the project tree. **If
 - Things to verify or watch in production
 ```
 
-### Phase 3: Update Project State
-
-5. Write `state.md` to `.temp/{feature_path}/` — the persistent project memory. If a previous `state.md` exists, merge:
-
+### C3. `state.md`
 ```markdown
 # Project State
 **Last Updated:** [ISO date]
@@ -99,7 +152,7 @@ These are NOT written to `.temp/` — they go directly to the project tree. **If
 
 ## Decisions
 
-### AD-[NNN]: [Decision title]
+### AD-001: [Decision title]
 **Date:** [date]
 **Feature:** [feature name]
 **Decision:** [What was decided]
@@ -110,7 +163,7 @@ These are NOT written to `.temp/` — they go directly to the project tree. **If
 
 ## Active Blockers
 
-### B-[NNN]: [Blocker description]
+### B-001: [Blocker description]
 **Discovered:** [date]
 **Impact:** [What's blocked]
 **Workaround:** [Temporary solution, if any]
@@ -119,7 +172,7 @@ These are NOT written to `.temp/` — they go directly to the project tree. **If
 
 ## Lessons Learned
 
-### L-[NNN]: [Lesson]
+### L-001: [Lesson]
 **Date:** [date]
 **Context:** [What happened]
 **Prevention:** [What to do differently]
@@ -141,117 +194,43 @@ These are NOT written to `.temp/` — they go directly to the project tree. **If
 - [ ] [Action item]
 ```
 
-Number IDs sequentially (AD-001, B-001, L-001).
+If a previous `state.md` exists, merge old entries and add new ones with incremented IDs.
 
-### Phase 4: Resolve Target Paths
+## Phase D — VERIFY EVERYTHING (blocking gate)
 
-6. Read `workflow.json` and extract:
-   - `feature_path`, `feature`, `project_root`, `service_dirs`
+**You MUST run this verification AND confirm it passes before calling `flow_step_complete`. This is NOT optional.**
 
-   Resolve service directories (try in order):
-   - Use `workflow.json.service_dirs` if non-empty
-   - Else parse `service-dirs.json` (resiliently — check for `"service_dirs"`, `"directories"`, plain arrays, nested objects)
-   - Else fall back to `["."]`
-
-   Each entry is relative to `project_root`. Write down the resolved list of
-   `(service_dir, output_dir)` pairs.
-
-### Phase 5: Write Reference Docs Directly to Project Tree
-
-⛔ **CRITICAL**: Write these 3 files directly to the project tree using `write`. Do NOT write them to `.temp/` first. There is no copy step — this IS the only write.
-
-7. **For each service directory**, create the target directory and write 3 files:
-
-```bash
-mkdir -p {project_root}/{service_dir}/references/features/{feature_path}
-```
-
-Then use `write` to create each file:
-
-**a) `{project_root}/{service_dir}/references/features/{feature_path}/feature-summary.md`** — concise what/why:
-
-```markdown
-# Feature Summary
-
-> **Breaking Changes:** Yes/No
-> **API Changes:** Description of any API contract changes
-
-## Feature
-
-{One-line description}
-
-## Changes
-
-- {key change 1}
-- {key change 2}
-
-## Verification
-
-{How the feature was verified}
-```
-
-**b) `{project_root}/{service_dir}/references/features/{feature_path}/learnings.md`** — domain insights, pitfalls, rationale:
-
-```markdown
-# Learnings
-
-## {Topic}
-
-{Lesson/insight — why a decision was made, what was learned during implementation}
-```
-
-**c) `{project_root}/{service_dir}/references/features/{feature_path}/maintenance.md`** — watch points, follow-ups:
-
-```markdown
-# Maintenance
-
-## Watch Points
-
-- {thing to watch out for — fragile areas, coupling, edge cases}
-
-## Known Follow-Ups
-
-- {unresolved issue or deferred work}
-```
-
-### Phase 6: Update README Index
-
-8. **Update the README index.** Read `{project_root}/{service_dir}/references/features/README.md`. Add a row to the table:
-
-```markdown
-| [{feature-slug}]({feature_path}/feature-summary.md) | {date} | {one-line description} |
-```
-
-If the README doesn't exist, create it:
-
-```markdown
-# Features
-
-This directory contains records of feature builds executed by the project-builder pipeline on this service.
-
-| Feature | Date | Description |
-|---------|------|-------------|
-| [{feature-slug}]({feature_path}/feature-summary.md) | {date} | {one-line description} |
-```
-
-### Phase 7: Verify & Complete
-
-9. **Verify all files before calling `flow_step_complete`.**
-
-Use `bash ls -la` to confirm the 3 project tree files exist and are non-empty:
+For each service directory from Phase A, run BOTH of these commands and check the output:
 
 ```bash
 ls -la {project_root}/{service_dir}/references/features/{feature_path}/
 ```
 
-All 3 files (`feature-summary.md`, `learnings.md`, `maintenance.md`) must be present and have size > 0.
-
-Also verify the README has the new entry:
+You must see ALL THREE files (`feature-summary.md`, `learnings.md`, `maintenance.md`) with size > 0.
+Then:
 
 ```bash
 grep "{feature_path}" {project_root}/{service_dir}/references/features/README.md
 ```
 
-The engine validates the 3 `.temp/` files automatically. You must verify the 3 project tree files and the README entry yourself.
+You must see the feature path in the README output.
 
-**Only after ALL FILES verified, call `flow_step_complete` with `result: "success"`.**
+Also verify the .temp files:
+
+```bash
+ls -la .temp/{feature_path}/summary.md .temp/{feature_path}/state.md .temp/{feature_path}/completion.md
+```
+
+All three must exist with size > 0.
+
+### ⛔ FAILURE GATE ⛔
+
+If ANY file is missing or empty, you MUST go back and fix it. Do NOT call `flow_step_complete`. The workflow will block if you submit without these files. The most commonly missed files are the project tree files in Phase B — double-check those.
+
+## Phase E — Complete
+
+Only after ALL files from Phase D pass verification, call:
+
+```
+flow_step_complete with result: "success"
+```
