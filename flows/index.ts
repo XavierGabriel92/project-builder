@@ -10,15 +10,17 @@ import type { FlowDefinition } from "../src/shared/types.ts";
  * The built-in 8-step feature-build pipeline.
  *
  * analyze (gate) → spec-write (gate) → plan → implement (2 attempts) →
- * review (gate) → lint → doc-sync → complete (gate)
+ * review (gate) → lint → doc-sync (2 attempts) → complete (gate)
  *
  * analyze merges: gather-input + discover into a single step with one output file.
  * spec-write merges: research findings into spec.md (no separate research.md).
  * implement uses task-based worker fan-out.
+ * doc-sync uses classify + writer subagents.
+ * complete uses reference-writer + verifier + artifact-writer subagents.
  */
 export const FEATURE_BUILD_FLOW: FlowDefinition = {
   id: "feature-build",
-  version: 3,
+  version: 5,
   description: "Full product feature build from analysis to completion docs",
   steps: [
     { agent: "analyze", requestApproval: true },
@@ -27,7 +29,7 @@ export const FEATURE_BUILD_FLOW: FlowDefinition = {
     { agent: "implement", attempts: 2 },
     { agent: "review", requestApproval: true },
     { agent: "lint" },
-    { agent: "doc-sync" },
+    { agent: "doc-sync", attempts: 2 },
     { agent: "complete" },
   ],
 };
@@ -55,9 +57,9 @@ export const BUG_FIX_FLOW: FlowDefinition = {
 };
 
 /**
- * The built-in 5-step small-feature pipeline.
+ * The built-in 6-step small-feature pipeline.
  *
- * analyze (gate) → spec-write → implement (2 attempts) → review (gate) → complete (gate)
+ * analyze (gate) → spec-write → implement (2 attempts) → review (gate) → lint → complete (gate)
  *
  * For well-scoped features: ≤10 files to change, no new dependencies,
  * no architecture changes. Skips plan (no architectural decisions needed)

@@ -95,44 +95,61 @@ The reference pipeline is `FEATURE_BUILD_FLOW` from `flows/index.ts`:
 ```typescript
 export const FEATURE_BUILD_FLOW: FlowDefinition = {
   id: "feature-build",
-  version: 2,
-  description: "Full product feature build from input gathering to completion docs",
+  version: 5,
+  description: "Full product feature build from analysis to completion docs",
   steps: [
-    { agent: "gather-input", requestApproval: true },
-    { agent: "discover" },
+    { agent: "analyze", requestApproval: true },
     { agent: "spec-write", requestApproval: true },
     { agent: "plan" },
     { agent: "implement", attempts: 2 },
     { agent: "review", requestApproval: true },
-    { agent: "doc-sync" },
+    { agent: "lint" },
+    { agent: "doc-sync", attempts: 2 },
     { agent: "complete" },
   ],
 };
 ```
 
-**8-step pipeline** (clarify merged into discover, research merged into spec-write):
+**8-step pipeline** with subagent delegation for doc-sync and complete:
 
 ```
-gather-input (gate) → discover → spec-write (gate) → plan →
-implement (2 attempts) → review (gate) → doc-sync → complete
+analyze (gate) → spec-write (gate) → plan →
+implement (2 attempts) → review (gate) → lint →
+doc-sync (2 attempts) → complete (gate)
 ```
 
-| Step | Agent | Outputs | Gate? | Notes |
-|------|-------|---------|-------|-------|
-| `gather-input` | `agents/gather-input.md` | `feature-input.md` | ✅ | User reviews input before discovery |
-| `discover` | `agents/discover.md` | `discovery.md`, `scout-report.md` | | Merges clarify + research into a single discovery phase |
-| `spec-write` | `agents/spec-write.md` | `spec.md` | ✅ | Writes spec from discovery output, user approves before planning |
-| `plan` | `agents/plan.md` | `plan.md`, `service-dirs.json` | | Produces implementation plan and service directory list |
-| `implement` | `agents/implement.md` | `implementation-notes.md` | | 2 attempts on error; uses worker subagents with parallel fan-out |
-| `review` | `agents/review.md` | `review-findings.md` | ✅ | Code review, user signs off before doc sync |
-| `doc-sync` | `agents/doc-sync.md` | `docs.md` | | Generates reference documentation |
-| `complete` | `agents/complete.md` | `summary.md`, per-service docs | | Final summary and cleanup |
+| Step | Agent | Subagents | Outputs | Gate? | Notes |
+|------|-------|-----------|---------|-------|-------|
+| `analyze` | `agents/analyze.md` | — | `analysis.md` | ✅ | Merged gather-input + discover |
+| `spec-write` | `agents/spec-write.md` | — | `spec.md` | ✅ | Writes spec from analysis, user approves |
+| `plan` | `agents/plan.md` | — | `plan.md`, `service-dirs.json` | | Implementation plan + service dirs |
+| `implement` | `agents/implement.md` | `worker` | `implementation-notes.md` | | 2 attempts; parallel worker fan-out |
+| `review` | `agents/review.md` | `reviewer` | `review-findings.md` | ✅ | Code review, user signs off |
+| `lint` | `agents/lint.md` | `lint-worker` | `lint-report.md` | | Ensures zero lint errors |
+| `doc-sync` | `agents/doc-sync.md` | `doc-sync-classify` → `doc-sync-writer` | `docs.md` | | Classify changes → write project docs; 2 attempts |
+| `complete` | `agents/complete.md` | `reference-writer` → `verifier` → `artifact-writer` | `summary.md`, `state.md`, `completion.md` + per-service refs | ✅ | Write project tree → verify → write .temp; final user approval |
+
+### doc-sync subagent flow
+```
+main agent
+  ├─ classify subagent — classifies change type, discovers docs, maps updates
+  └─ writer subagent — executes doc updates on real project files
+       (if any missed, re-dispatch with corrective instructions)
+```
+
+### complete subagent flow
+```
+main agent
+  ├─ reference-writer subagent — writes 3 project tree files + README index per service dir
+  ├─ verifier subagent — checks all files exist (re-dispatches writer on failure)
+  └─ artifact-writer subagent — writes .temp files (summary.md, state.md, completion.md)
+```
 
 ### How it plays out live
 
-1. User runs `/project-builder` in a Pi session, picks `feature-build`, names their feature (e.g. `user-auth`).
+1. User runs `/project-builder` in a Pi session, picks a flow, names their feature (e.g. `user-auth`).
 2. **`flow_start`** freezes the flow definition into a snapshot — the original can't affect the run anymore.
-3. The engine walks through the 8 steps in order. At each **`flow_step`** call:
+3. The engine walks through the steps in order (8-11 depending on the flow). At each **`flow_step`** call:
    - Resolves `agents/{agent}.md`, parses its YAML frontmatter, and builds the prompt with workspace context.
    - Marks the step `"running"` and returns the `StepInstruction` (tools + prompt + subagents).
 4. The LLM executes the agent's instructions, optionally reporting progress via **`flow_step_update`**.
