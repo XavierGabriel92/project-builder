@@ -5,6 +5,11 @@
  * project naming, and workflow start/resume.
  */
 
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -94,6 +99,39 @@ export function registerCommands(pi: ExtensionAPI, engine: EngineContext, regist
 // Multi-line text input dialog (wraps Editor from pi-tui)
 // ============================================================================
 
+/**
+ * Resolve the path to the `fd` binary, which is required by
+ * CombinedAutocompleteProvider for @ fuzzy file autocomplete.
+ *
+ * Checks pi's standard bin directory first (where pi automatically
+ * downloads fd on first run), then falls back to the system PATH.
+ * Returns null if fd is not found — autocomplete will fall back to
+ * prefix-based file completion.
+ */
+function resolveFdPath(): string | null {
+  // 1. Check pi's standard bin dir (~/.pi/agent/bin/fd)
+  const piBinFd = join(homedir(), ".pi", "agent", "bin", "fd");
+  if (existsSync(piBinFd)) return piBinFd;
+
+  // 2. Check PATH for fd or fdfind (Debian/Ubuntu rename)
+  const whichNames = process.platform === "win32"
+    ? ["fd.exe", "fdfind.exe"]
+    : ["fd", "fdfind"];
+  const whichCmd = process.platform === "win32" ? "where" : "which";
+  for (const name of whichNames) {
+    const result = spawnSync(whichCmd, [name], {
+      encoding: "utf-8",
+      timeout: 2000,
+    });
+    if (result.status === 0 && result.stdout) {
+      const path = result.stdout.trim().split("\n")[0].trim();
+      if (path) return path;
+    }
+  }
+
+  return null;
+}
+
 function buildEditorTheme(theme: Theme): EditorTheme {
   return {
     borderColor: (text: string) => theme.fg("borderMuted", text),
@@ -132,6 +170,7 @@ class FeatureContextDialog extends Container implements Focusable {
     title: string,
     onDone: (value: string | undefined) => void,
     projectRoot: string,
+    fdPath: string | null,
   ) {
     super();
     this.tui = tui;
@@ -154,9 +193,10 @@ class FeatureContextDialog extends Container implements Focusable {
       const trimmed = value.trim();
       onDone(trimmed || undefined);
     };
-    // Enable @ file-reference autocomplete (fuzzy file search scoped to project root)
+    // Enable @ file-reference autocomplete (fuzzy file search scoped to project root).
+    // fdPath enables fd-based fuzzy search; null falls back to prefix-based completion.
     this.editor.setAutocompleteProvider(
-      new CombinedAutocompleteProvider([], projectRoot),
+      new CombinedAutocompleteProvider([], projectRoot, fdPath),
     );
     this.addChild(this.editor);
 
@@ -195,9 +235,10 @@ async function multilineInput(
   ctx: ExtensionCommandContext,
   title: string,
   projectRoot: string,
+  fdPath: string | null,
 ): Promise<string | undefined> {
   return ctx.ui.custom<string | undefined>((tui, piTheme, _kb, done) => {
-    const dialog = new FeatureContextDialog(tui, piTheme, title, done, projectRoot);
+    const dialog = new FeatureContextDialog(tui, piTheme, title, done, projectRoot, fdPath);
     return {
       render: (width: number) => dialog.render(width),
       invalidate: () => dialog.invalidate(),
@@ -238,11 +279,14 @@ async function startNewWorkflow(
     return undefined;
   }
 
-  // Collect open-text description of what the user wants to build
+  // Collect open-text description of what the user wants to build.
+  // Resolve fdPath for @ file-reference fuzzy autocomplete in the editor.
+  const fdPath = resolveFdPath();
   const featureContext = await multilineInput(
     ctx,
     "What do you want to build? (optional)",
     projectRoot,
+    fdPath,
   );
   // undefined means user cancelled the dialog (pressed Escape with empty text)
   // empty string means user submitted with no text — treat as no context

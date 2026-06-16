@@ -7,13 +7,12 @@
 import type { FlowDefinition } from "../src/shared/types.ts";
 
 /**
- * The built-in 8-step feature-build pipeline.
+ * The built-in 7-step feature-build pipeline.
  *
- * analyze (gate) → spec-write (gate) → plan → implement (2 attempts) →
+ * spec-write (gate) → plan → implement (2 attempts) →
  * review (gate) → lint → doc-sync (2 attempts) → complete (gate)
  *
- * analyze merges: gather-input + discover into a single step with one output file.
- * spec-write merges: research findings into spec.md (no separate research.md).
+ * spec-write merges: analysis + specification into a single step producing spec.md.
  * implement uses task-based worker fan-out.
  * doc-sync audits existing reference docs and writes audit report.
  * complete writes summary files to .temp/ (engine-validated) and reference
@@ -21,10 +20,9 @@ import type { FlowDefinition } from "../src/shared/types.ts";
  */
 export const FEATURE_BUILD_FLOW: FlowDefinition = {
   id: "feature-build",
-  version: 5,
-  description: "Full product feature build from analysis to completion docs",
+  version: 6,
+  description: "Full product feature build from specification to completion docs",
   steps: [
-    { agent: "analyze", requestApproval: true },
     { agent: "spec-write", requestApproval: true },
     { agent: "plan" },
     { agent: "implement", attempts: 2 },
@@ -58,23 +56,22 @@ export const BUG_FIX_FLOW: FlowDefinition = {
 };
 
 /**
- * The built-in 6-step small-feature pipeline.
+ * The built-in 5-step small-feature pipeline.
  *
- * analyze (gate) → spec-write → implement (2 attempts) → review (gate) → lint → complete (gate)
+ * spec-write (gate) → implement (2 attempts) → review (gate) → lint → complete (gate)
  *
  * For well-scoped features: ≤10 files to change, no new dependencies,
  * no architecture changes. Skips plan (no architectural decisions needed)
  * and doc-sync (minimal doc impact — complete handles the essentials).
- * The analyze agent's complexity assessment classifies features and
+ * The spec-write agent's complexity assessment classifies features and
  * suggests this flow for Quick-scope changes.
  */
 export const SMALL_FEATURE_FLOW: FlowDefinition = {
   id: "small-feature",
-  version: 1,
+  version: 2,
   description: "Small feature — ≤10 files, no new deps, no architecture changes",
   steps: [
-    { agent: "analyze", requestApproval: true },
-    { agent: "spec-write" },
+    { agent: "spec-write", requestApproval: true },
     { agent: "implement", attempts: 2 },
     { agent: "review", requestApproval: true },
     { agent: "lint" },

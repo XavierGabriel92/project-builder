@@ -283,9 +283,7 @@ outputs: ["plan.md", "service-dirs.json"]
 
 | Step | Outputs | Read By |
 |------|---------|---------|
-| `gather-input` | `feature-input.md` | `discover`, `spec-write`, `complete` |
-| `discover` | `discovery.md`, `scout-report.md`, `clarifications.md` | `spec-write`, `plan`, `complete` |
-| `spec-write` | `spec.md`, `research.md` | `plan`, `implement`, `review`, `complete` |
+| `spec-write` | `spec.md` | `plan`, `implement`, `review`, `complete` |
 | `plan` | `plan.md`, `service-dirs.json` | `implement`, `review`, `complete` |
 | `implement` | `implementation-notes.md` | `review`, `complete` |
 | `review` | `review-findings.md` | `complete` |

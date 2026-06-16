@@ -98,7 +98,6 @@ export const FEATURE_BUILD_FLOW: FlowDefinition = {
   version: 5,
   description: "Full product feature build from analysis to completion docs",
   steps: [
-    { agent: "analyze", requestApproval: true },
     { agent: "spec-write", requestApproval: true },
     { agent: "plan" },
     { agent: "implement", attempts: 2 },
@@ -110,18 +109,17 @@ export const FEATURE_BUILD_FLOW: FlowDefinition = {
 };
 ```
 
-**8-step pipeline** with subagent delegation for doc-sync and complete:
+**7-step pipeline** with subagent delegation for doc-sync and complete:
 
 ```
-analyze (gate) → spec-write (gate) → plan →
+spec-write (gate) → plan →
 implement (2 attempts) → review (gate) → lint →
 doc-sync (2 attempts) → complete (gate)
 ```
 
 | Step | Agent | Subagents | Outputs | Gate? | Notes |
 |------|-------|-----------|---------|-------|-------|
-| `analyze` | `agents/analyze.md` | — | `analysis.md` | ✅ | Merged gather-input + discover |
-| `spec-write` | `agents/spec-write.md` | — | `spec.md` | ✅ | Writes spec from analysis, user approves |
+| `spec-write` | `agents/spec-write.md` | `scout` | `spec.md` | ✅ | Merged analysis + specification |
 | `plan` | `agents/plan.md` | — | `plan.md`, `service-dirs.json` | | Implementation plan + service dirs |
 | `implement` | `agents/implement.md` | `worker` | `implementation-notes.md` | | 2 attempts; parallel worker fan-out |
 | `review` | `agents/review.md` | `reviewer` | `review-findings.md` | ✅ | Code review, user signs off |
