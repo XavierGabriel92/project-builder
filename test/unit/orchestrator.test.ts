@@ -214,8 +214,9 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
     assert.equal(outcome.gate.header, "Gather Input");
 
     // Answer gate: approve
+    const gatherGateNonce = outcome.gate!.nonce;
     let gateResult = recordGate(
-      { stepIndex: 0, chosenLabel: "Approve", advance: true },
+      { stepIndex: 0, chosenLabel: "Approve", advance: true, gateNonce: gatherGateNonce },
       projectRoot,
       featurePath
     );
@@ -263,13 +264,13 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
 
     // Advance past gather-input
     step(projectRoot, { featurePath, agentsDir });
-    stepComplete(
+    const gatherOutcome = stepComplete(
       { result: "success", message: "Done" },
       projectRoot,
       { featurePath, agentsDir }
     );
     recordGate(
-      { stepIndex: 0, chosenLabel: "Approve", advance: true },
+      { stepIndex: 0, chosenLabel: "Approve", advance: true, gateNonce: gatherOutcome!.gate!.nonce },
       projectRoot,
       featurePath
     );
@@ -316,8 +317,9 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
     assert.equal(outcome?.action, "gate");
 
     // User says "refine" (not approved)
+    const gateNonce = outcome.gate!.nonce;
     let gateResult = recordGate(
-      { stepIndex: 0, chosenLabel: "Refine", advance: false },
+      { stepIndex: 0, chosenLabel: "Refine", advance: false, gateNonce },
       projectRoot,
       featurePath
     );
@@ -327,6 +329,35 @@ describe("engine.stepComplete + recordGate (full walkthrough)", () => {
     // Step should be pending again
     const state = status(projectRoot, featurePath);
     assert.equal(state?.steps[0].status, "pending");
+  });
+
+  it("accepts gate answer without nonce (backward compat)", () => {
+    const { featurePath } = start(testFlow, "missing-nonce", projectRoot, { agentsDir });
+
+    step(projectRoot, { featurePath, agentsDir });
+    let outcome = stepComplete(
+      { result: "success", message: "Done" },
+      projectRoot,
+      { featurePath, agentsDir }
+    );
+    assert.equal(outcome?.action, "gate");
+    assert.ok(outcome.gate?.nonce); // nonce was generated
+
+    // Answer gate WITHOUT gateNonce (simulating old agent)
+    let gateResult = recordGate(
+      { stepIndex: 0, chosenLabel: "Approve", advance: true },
+      projectRoot,
+      featurePath
+    );
+    assert.ok(gateResult);
+    assert.equal(gateResult.action, "advance"); // still advances
+    assert.ok(gateResult.warning); // warning emitted
+    assert.match(gateResult.warning!, /without gateNonce/);
+
+    // Workflow advanced to step 1
+    const state = status(projectRoot, featurePath);
+    assert.equal(state?.status, "in_progress");
+    assert.equal(state?.current_step_index, 1);
   });
 
   it("warns when a successful step is missing declared outputs", () => {

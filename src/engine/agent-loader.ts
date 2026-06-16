@@ -152,7 +152,8 @@ export function validateFlowApproval(
  */
 export function buildGate(
   manifest: AgentManifest,
-  stepIndex: number
+  stepIndex: number,
+  nonce: string
 ): WorkflowGate | null {
   if (!manifest.approval) return null;
 
@@ -161,6 +162,7 @@ export function buildGate(
     preview: manifest.approval.preview,
     options: manifest.approval.options,
     stepIndex,
+    nonce,
   };
 }
 

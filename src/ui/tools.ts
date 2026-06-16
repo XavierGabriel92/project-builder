@@ -47,6 +47,54 @@ function isRunningWorkflow(state: WorkflowState): boolean {
 }
 
 // ============================================================================
+// Gate-state enforcement — blocks non-gate tool calls when awaiting approval
+// ============================================================================
+
+const ALLOWED_DURING_GATE = new Set([
+  "flow_record_gate",
+  "flow_status",
+  "flow_continue",
+  "flow_abort",
+]);
+
+/**
+ * Check if a non-gate tool call is being made while a workflow is awaiting
+ * user approval. Returns an error result if the tool should be blocked.
+ *
+ * This prevents agents from executing work (read, edit, bash, etc.) between
+ * receiving a gate answer and recording it via flow_record_gate.
+ */
+function checkGateBlock(
+  engine: EngineContext,
+  toolName: string,
+  projectRoot: string,
+  featurePath?: string
+): AgentToolResult | null {
+  const current = engine.status(projectRoot, featurePath);
+  if (!current) return null;
+
+  if (
+    current.status === "awaiting_user" &&
+    current.gate &&
+    !ALLOWED_DURING_GATE.has(toolName)
+  ) {
+    return errorResult(
+      `⛔ PROTOCOL VIOLATION: Workflow "${current.feature}" is awaiting a gate answer at step ${current.current_step_index + 1}.\n\n` +
+        `You called \`${toolName}\`, but the ONLY allowed tools while awaiting a gate are:\n` +
+        `  - flow_record_gate  (record the user's answer)\n` +
+        `  - flow_continue     (re-read gate details)\n` +
+        `  - flow_status       (check workflow status)\n` +
+        `  - flow_abort        (abandon the workflow)\n\n` +
+        `Do NOT execute work between receiving a gate answer and recording it. ` +
+        `Call \`flow_record_gate\` NOW with the user's choice.`,
+      { featurePath: current.feature_path, gate: { header: current.gate.header, stepIndex: current.gate.stepIndex } }
+    );
+  }
+
+  return null;
+}
+
+// ============================================================================
 // Shared render helpers
 // ============================================================================
 
@@ -215,6 +263,9 @@ export function registerTools(
     ): Promise<AgentToolResult> {
       const projectRoot = params.projectRoot || getProjectRoot();
 
+      const gateBlock = checkGateBlock(engine, "flow_step", projectRoot, params.featurePath);
+      if (gateBlock) return gateBlock;
+
       try {
         const instruction = engine.step(projectRoot, {
           featurePath: params.featurePath,
@@ -319,6 +370,10 @@ export function registerTools(
       _ctx: ExtensionContext
     ): Promise<AgentToolResult> {
       const projectRoot = params.projectRoot || getProjectRoot();
+
+      const gateBlock = checkGateBlock(engine, "flow_step_update", projectRoot, params.featurePath);
+      if (gateBlock) return gateBlock;
+
       const outcome = engine.stepUpdate(
         {
           stepIndex: params.stepIndex,
@@ -429,6 +484,9 @@ export function registerTools(
       _ctx: ExtensionContext
     ): Promise<AgentToolResult> {
       const projectRoot = params.projectRoot || getProjectRoot();
+
+      const gateBlock = checkGateBlock(engine, "flow_step_complete", projectRoot, params.featurePath);
+      if (gateBlock) return gateBlock;
 
       try {
         const outcome = engine.stepComplete(

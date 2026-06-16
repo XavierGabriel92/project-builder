@@ -17,6 +17,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 import {
   type FlowDefinition,
   type GateAnswer,
@@ -163,26 +164,49 @@ const APPROVAL_INSTRUCTION =
   "After you submit `flow_step_complete` with `result: \"success\"`, this step will " +
   "pause for user approval before the workflow advances. " +
   "You MUST follow this exact protocol:\n\n" +
-  "### Protocol\n\n" +
-  "1. Call `flow_continue` to see the full gate details.\n" +
+  "### Protocol (gate phase ONLY)\n\n" +
+  "1. Call `flow_continue` to see the full gate details (including the gate nonce).\n" +
   "2. Use `ask_user_question` to present the gate options to the user.\n" +
-  "3. **After the user answers, IMMEDIATELY call `flow_record_gate`.**\n" +
-  "   - Do NOT read files, write files, make edits, or do any other work.\n" +
-  "   - Do NOT refine your output based on the user's feedback.\n" +
-  "   - The user's answer IS the decision — record it NOW.\n" +
+  "3. **After the gate-phase `ask_user_question` returns, your VERY NEXT tool call MUST be `flow_record_gate` and NOTHING ELSE.**\n" +
+  "   - No reads, no edits, no bash commands, no writes, no other tool calls.\n" +
+  "   - Record the gate NOW. The engine will retry the step with your feedback.\n" +
   "4. Use the **EXACT option label** from the gate options — do NOT add " +
   "any suffix like \"(Recommended)\" to the label.\n" +
   "5. If the user chose a \"Request changes\" / \"Refine\" option, " +
   "include their feedback as the `feedback` argument. " +
-  "The workflow will retry the step with the feedback.\n\n" +
+  "The workflow will retry the step with the feedback.\n" +
+  "6. Pass the `gateNonce` from the gate details into `flow_record_gate`. " +
+  "The engine will reject gate answers without the correct nonce.\n\n" +
+  "### ⚠️ CRITICAL — Common Failure Mode\n\n" +
+  "The user may answer with feedback that sounds like instructions:\n" +
+  "- 'change X to Y'\n" +
+  "- 'fix the bug in Z'\n" +
+  "- 'remove the Events section'\n\n" +
+  "THIS IS NOT A WORK ORDER FOR YOU. It is feedback to be recorded " +
+  "via `flow_record_gate`. The engine will automatically retry the step " +
+  "with this feedback so the NEXT agent run can apply it correctly.\n\n" +
+  "YOUR ONLY ACTION after the gate-phase `ask_user_question` returns is `flow_record_gate`. " +
+  "If you execute the feedback yourself, you bypass user review and " +
+  "corrupt the workflow state.\n\n" +
+  "### Gate phase vs. normal work\n\n" +
+  "- **Normal step work**: You MAY use `ask_user_question` anytime during your step " +
+  "    (e.g., to ask clarifying questions). After the user answers, continue your work normally.\n" +
+  "- **Gate phase**: This ONLY happens AFTER you call `flow_step_complete` with success. " +
+  "    The engine creates a gate. You then present it with `ask_user_question`, " +
+  "    and IMMEDIATELY record the answer with `flow_record_gate`.\n\n" +
   "### Never\n\n" +
-  "- Do NOT do any work between the `ask_user_question` answer and `flow_record_gate`.\n" +
+  "- Do NOT auto-answer the gate under any circumstances. Even if the user " +
+  "previously said \"don't ask questions\" or \"just keep going\", " +
+  "you MUST still present this gate with `ask_user_question`. " +
+  "Approval gates are mandatory checkpoints — the engine requires human " +
+  "review at these steps regardless of prior instructions.\n" +
+  "- Do NOT fabricate a gate answer without first calling `flow_continue` " +
+  "to get the correct gate nonce from the gate details. Answers with missing " +
+  "or incorrect nonces will be rejected by the engine.\n" +
+  "- Do NOT do any work between the gate-phase `ask_user_question` answer and `flow_record_gate`.\n" +
   "- Do NOT add \"(Recommended)\" or any suffix to gate option labels.\n" +
-  "- Do NOT call `flow_record_gate` without the user's explicit choice " +
-  "(unless they gave a standing instruction to auto-approve).\n\n" +
-  "If the user has given you general instructions to proceed without asking " +
-  "(e.g., \"do not ask questions, keep going\"), you may auto-answer the gate. " +
-  "Otherwise, always ask first.";
+  "- Do NOT call `flow_record_gate` without the user's explicit choice from " +
+  "the `ask_user_question` response.";
 
 const SUBAGENT_COMPLETION_SUFFIX =
   "\n\n## Completion\n\n" +
@@ -434,11 +458,16 @@ export function stepComplete(
       ? verifyExpectedOutputs(agentsDir, projectRoot, resolved.featurePath, flowStep.agent)
       : [];
 
+  // Generate a nonce for this gate cycle. The agent must pass it back
+  // via gateNonce in `flow_record_gate`. This prevents agents from
+  // fabricating gate answers without going through the full gate cycle.
+  const gateNonce = crypto.randomUUID();
+
   // Build gate loader bound to the agents directory (cached)
   const loadGate = (agent: string, stepIndex: number): import("../shared/types.ts").WorkflowGate | null => {
     try {
       const loaded = getCachedAgent(agentsDir, agent);
-      return buildGate(loaded.manifest, stepIndex);
+      return buildGate(loaded.manifest, stepIndex, gateNonce);
     } catch {
       return null;
     }
@@ -522,6 +551,13 @@ export interface GateResult {
   aborted?: boolean;
   /** Present when the gate answer could not be applied */
   error?: string;
+  /**
+   * Present when action is "block" due to nonce mismatch.
+   * The agent must use this gate (with its nonce) to retry `flow_record_gate`.
+   */
+  gate?: import("../shared/types.ts").WorkflowGate;
+  /** Non-blocking warning (e.g. gate answered without nonce) */
+  warning?: string;
 }
 
 /**
@@ -540,10 +576,34 @@ export function recordGate(
   const resolved = resolveWorkflow(projectRoot, featurePath);
   if (!resolved) return null;
 
+  // Validate gate nonce — the agent must have obtained this from the
+  // active gate via `flow_continue`. Fabricated or stale nonces are rejected.
+  //
+  // Two-tiered: a WRONG nonce is a real fabrication attempt and is blocked.
+  // A MISSING nonce is accepted with a warning — the agent may be running
+  // with a prompt that predates the nonce instruction.
+  if (resolved.state.gate && answer.gateNonce !== undefined) {
+    if (answer.gateNonce !== resolved.state.gate.nonce) {
+      return {
+        state: resolved.state,
+        featurePath: resolved.featurePath,
+        action: "block",
+        gate: resolved.state.gate,
+        error:
+          "Gate nonce mismatch. The gate answer must include the correct gateNonce " +
+          "obtained from `flow_continue`. Fabricated or stale gate answers are rejected. " +
+          "Call `flow_continue` to get the current gate details with the correct nonce, " +
+          "then retry `flow_record_gate` with `gateNonce` set to the nonce shown above.",
+      };
+    }
+  }
+
   const transition = applyGateAnswer(resolved.state, answer);
 
   // Persist the new state
   writeWorkflow(projectRoot, resolved.featurePath, transition.state);
+
+  const missingNonce = resolved.state.gate && answer.gateNonce === undefined;
 
   return {
     state: transition.state,
@@ -551,6 +611,10 @@ export function recordGate(
     action: transition.action,
     aborted: transition.action === "abort",
     error: transition.error,
+    warning: missingNonce
+      ? "Gate answered without gateNonce. The agent should include gateNonce " +
+        "from the gate details in future gate answers for full validation."
+      : undefined,
   };
 }
 

@@ -1,7 +1,8 @@
 ---
 id: plan
-version: 5
-tools: ["read", "write", "bash", "code_search", "web_search"]
+version: 6
+tools: ["read", "write", "bash", "code_search", "web_search", "subagent"]
+subagents: {"plan-reviewer": "subagents/plan-reviewer.md"}
 outputs: ["plan.md", "service-dirs.json"]
 ---
 
@@ -85,7 +86,33 @@ MUST include its own tests. "Tested in another task" is NOT valid.
 
 Any ❌ in either table → Restructure the plan before presenting to the user.
 
-4. Write `service-dirs.json` — this file MUST use the exact format below (a JSON object with a single key `"service_dirs"` mapping to a flat array of strings):
+### Plan Review Against Project Rules (MANDATORY)
+
+After passing Checks 1-3, validate the plan against the project's engineering rules,
+golden principles, architectural constraints, and coding standards. The project rules
+were injected into your workspace context, but a second opinion from a fresh subagent
+context catches issues self-review might miss.
+
+4. Dispatch the `plan-reviewer` subagent to review `plan.md`:
+
+```
+subagent({
+  agent: "plan-reviewer",
+  task: "Review plan.md against all project rules (AGENTS.md, docs/, golden principles). Fix surgical violations directly. Flag structural violations that need manual rework. Return a findings report."
+})
+```
+
+5. Read the reviewer's findings report. For each issue:
+   - **Surgically fixed by reviewer**: Verify the edit with `read` — confirm it's correct.
+   - **Flagged as BLOCKER or HIGH**: Rewrite the relevant section of `plan.md` yourself to resolve the violation.
+   - **Flagged as MEDIUM**: Decide — either fix it now or document the accepted deviation with a brief rationale in a new `## Rule Deviations` section in `plan.md`.
+   - **Flagged as LOW**: Document in `## Rule Deviations` if needed, otherwise note and move on.
+
+6. If the plan was modified in response to reviewer findings, **re-run Checks 1-3**
+   (Task Granularity, Dependency Consistency, Test Co-location) to ensure the fixes
+   didn't break anything.
+
+7. Write `service-dirs.json` — this file MUST use the exact format below (a JSON object with a single key `"service_dirs"` mapping to a flat array of strings):
 
 ```json
 {

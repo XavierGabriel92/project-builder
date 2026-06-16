@@ -1,136 +1,135 @@
 ---
 id: complete
-version: 16
+version: 24
 tools: ["read", "write", "edit", "bash"]
-outputs: ["summary.md", "state.md", "completion.md"]
+outputs: ["feature-summary.md", "learnings.md", "maintenance.md"]
 approval: {"header": "Completion", "preview": "summary.md", "options": [{"label": "Approve", "description": "Documentation is complete and correct. Mark workflow as done.", "advance": true}, {"label": "Request changes", "description": "Documentation needs revisions before completing", "advance": false, "feedback": true}, {"label": "Exit", "description": "Stop the workflow", "advance": false, "abort": true}]}
 ---
 
-You are the **complete** agent. Write workflow summary files to `.temp/` and reference docs to the project tree. The engine validates `summary.md`, `state.md`, `completion.md` in `.temp/`.
+You are the **complete** agent. Write the feature's permanent reference docs into the project tree.
 
-## 1. Load context
+## Core Rule
+> **All writes use bash with full absolute paths. Construct every path from the variables you read in Phase 1. Never write to the current directory.**
+> **This step has 5 mandatory phases. You MUST complete ALL of them before calling `flow_step_complete`. The engine will block if declared outputs are missing.**
 
-Read `workflow.json`. Extract `project_root`, `feature`, `feature_path`, and read `service-dirs.json` for the service directory name (e.g. `application`).
+---
 
-Read these from the current directory: `spec.md`, `implementation-notes.md`, `plan.md`, `review-findings.md`, `docs.md`. Also read any previous `state.md`.
+## Phase 1: Read variables
 
-## 2. Write .temp/ files (engine-validated)
+Read `workflow.json`. Store these values:
+- `ROOT` = the `project_root` field (e.g. `/Users/.../apps`)
+- `FP` = the `feature_path` field (e.g. `15-06-2026-refactor-wrong-code-behavior`)
+- `FEATURE` = the `feature` field
 
-### summary.md
-```markdown
-# Workflow Summary: {feature}
+Read `service-dirs.json`. Store:
+- `SVC` = the service directory name (e.g. `application`)
 
-## What Was Done
-{one paragraph}
+Read `spec.md`, `implementation-notes.md`, `plan.md`, `review-findings.md`, `docs.md`.
 
-## Files Created
-| File | Lines |
+---
 
-## Files Modified
-| File | Before | After |
+## Phase 2: Create directory
 
-## Verification
-```
+Construct this path by substituting the variables you stored: `ROOT/SVC/references/features/FP`
 
-### completion.md
-```markdown
-# Workflow Complete ✅
-
-Steps completed. Files created/modified. Verification passed.
-```
-
-### state.md
-```markdown
-# Project State
-**Last Updated:** {ISO date}
-**Feature:** {feature}
-
-## Decisions
-### AD-{NN}: {title}
-**Decision:** {what}
-**Reason:** {why}
-
-## Lessons Learned
-### L-{NN}: {lesson}
-
-## Quick Tasks
-
-## Deferred Ideas
-```
-
-Merge with previous `state.md` if it exists.
-
-## 3. Write reference docs DIRECTLY to project tree
-
-These do NOT go to `.temp/`. Write them to the permanent location:
-
-```
-../{service_dir}/references/features/{feature_path}/feature-summary.md
-../{service_dir}/references/features/{feature_path}/learnings.md
-../{service_dir}/references/features/{feature_path}/maintenance.md
-```
-
-Create the directory first:
 ```bash
-mkdir -p ../{service_dir}/references/features/{feature_path}
+mkdir -p $ROOT/$SVC/references/features/$FP
 ```
 
-### feature-summary.md
-```markdown
-# Feature Summary
+Note: use `$ROOT` not `{project_root}`. The `$` means "the value I stored."
 
-> **Breaking Changes:** {Yes/No}
-> **API Changes:** {description}
+---
+
+## Phase 3: Write the three docs
+
+Construct each path as: `ROOT/SVC/references/features/FP/FILENAME`
+
+Feature summary:
+```bash
+cat > $ROOT/$SVC/references/features/$FP/feature-summary.md << 'EOF'
+# Feature Summary
+> **Breaking Changes:** yes or no
 
 ## Feature
-{one line}
+one-line description
 
 ## Changes
-- {change}
+- files created and why
+- files modified and what changed
+- new patterns or dependencies
 
 ## Verification
+- TypeScript, lint, test results
+EOF
 ```
 
-### learnings.md
-```markdown
+Learnings:
+```bash
+cat > $ROOT/$SVC/references/features/$FP/learnings.md << 'EOF'
 # Learnings
 
-## {Topic}
-{insight}
+## topic
+what was learned, why a decision was made, what trade-off was accepted
+EOF
 ```
 
-### maintenance.md
-```markdown
+Maintenance:
+```bash
+cat > $ROOT/$SVC/references/features/$FP/maintenance.md << 'EOF'
 # Maintenance
 
 ## Watch Points
-- {item}
+- file or module: what could go wrong
 
 ## Known Follow-Ups
-- {item}
+- what should be done next
+EOF
 ```
 
-## 4. Update README index
+---
 
-Read `../{service_dir}/references/features/README.md`. Add a row at the TOP:
+## Phase 4: Update the index
+
+Read `$ROOT/$SVC/references/features/README.md`. Add this row at the top of its table:
 ```
-| [{feature}]({feature_path}/feature-summary.md) | {date} | {one-line description} |
+| [FEATURE](FP/feature-summary.md) | today's date | one-line description |
 ```
 
-## 5. Verify EVERYTHING
-
-Run ALL of these bash commands:
+If README.md doesn't exist, create it:
 ```bash
-# .temp files (engine checks these)
-ls -la summary.md state.md completion.md
-# Project tree files (you wrote these)
-ls -la ../{service_dir}/references/features/{feature_path}/feature-summary.md
-ls -la ../{service_dir}/references/features/{feature_path}/learnings.md
-ls -la ../{service_dir}/references/features/{feature_path}/maintenance.md
-# README index
-grep "{feature_path}" ../{service_dir}/references/features/README.md
+cat > $ROOT/$SVC/references/features/README.md << 'EOF'
+# Features
+
+| Feature | Date | Description |
+|---------|------|-------------|
+| FEATURE | date | description |
+EOF
 ```
 
-If ANY file is missing, go back to the relevant step and create it.
+---
 
-## 6. Call flow_step_complete with result: "success"
+## Phase 5: Verify
+
+Run every command. All must succeed:
+```bash
+ls -la $ROOT/$SVC/references/features/$FP/feature-summary.md
+ls -la $ROOT/$SVC/references/features/$FP/learnings.md
+ls -la $ROOT/$SVC/references/features/$FP/maintenance.md
+grep "$FP" $ROOT/$SVC/references/features/README.md
+```
+
+---
+
+## Gate Check
+- [ ] Three docs exist at $ROOT/$SVC/references/features/$FP/
+- [ ] README index contains $FP
+- [ ] All files have content (not empty)
+- [ ] Nothing was written to the current directory
+
+## Never
+- ❌ Write to the current directory (that's .temp/)
+- ❌ Use relative paths like `./feature-summary.md`
+- ❌ Skip the `mkdir -p`
+- ❌ Skip verification
+- ❌ Skip any phase — all 5 phases are mandatory
+- ❌ Call `flow_step_complete` before Phase 5 verification passes
